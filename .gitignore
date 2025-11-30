@@ -1,0 +1,36 @@
+# Raw and processed data (ignore large data files but keep directory placeholders)
+data/raw/
+data/processed/
+
+# Large binary data formats
+*.parquet
+*.zip
+*.xpt
+
+# Keep directory structure
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+
+# Allow specific CSV files that are documentation/config (must come BEFORE *.csv)
+!docs/config/*.csv
+!data/analysis/*_dictionary.csv
+!data/analysis/*_descriptions.csv
+
+# Ignore most CSVs (large data files)
+*.csv
+
+# Excel files
+*.xlsx
+*.xls
+
+# IDE
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+
