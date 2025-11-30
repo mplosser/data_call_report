@@ -5,7 +5,13 @@ Extracts zip files and parses raw data from Chicago Fed SAS XPORT files.
 Preserves ALL MDRM codes without filtering or renaming.
 
 Usage:
-    python parse_chicago.py --input-dir /data/raw/chicago/extracted --output-dir /data/processed
+    # Default behaviour: look in data/raw/chicago and its 'extracted/' subfolder
+    # for ZIP and XPT files. ZIPs are extracted into 'extracted/' automatically.
+    python parse_chicago.py
+
+    # Or specify input/output explicitly (you can point to 'data/raw/chicago' or
+    # 'data/raw/chicago/extracted'):
+    python parse_chicago.py --input-dir data/raw/chicago --output-dir data/processed
 """
 
 import pandas as pd
@@ -214,10 +220,10 @@ def process_file_wrapper(args_tuple):
 
 def main():
     parser = argparse.ArgumentParser(description='Extract raw Chicago Fed data to Parquet')
-    parser.add_argument('--input-dir', type=str, required=True,
-                        help='Directory containing extracted SAS .xpt files')
-    parser.add_argument('--output-dir', type=str, required=True,
-                        help='Directory to save raw quarterly parquet files')
+    parser.add_argument('--input-dir', type=str, default='data/raw/chicago',
+                        help='Directory containing raw ZIPs or extracted .xpt files (default: data/raw/chicago)')
+    parser.add_argument('--output-dir', type=str, default='data/processed',
+                        help='Directory to save raw quarterly parquet files (default: data/processed)')
     parser.add_argument('--start-date', type=str, default=None,
                         help='Start date (YYYY-MM-DD), optional')
     parser.add_argument('--end-date', type=str, default=None,
@@ -233,16 +239,39 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all .xpt files and .zip files
-    xpt_files = sorted(input_dir.glob('*.xpt'))
+    # We accept either an input directory containing extracted .xpt files
+    # (e.g. data/raw/chicago/extracted) OR the parent directory that contains
+    # ZIP archives (e.g. data/raw/chicago). We'll search both locations so the
+    # script works for either workflow.
+
+    extracted_dir = input_dir / 'extracted'
+
+    # Collect xpt files from both input_dir (in case .xpt were placed there) and
+    # extracted_dir if present
+    xpt_files = sorted([p for p in input_dir.glob('*.xpt')] + [p for p in extracted_dir.glob('*.xpt')] if extracted_dir.exists() else [p for p in input_dir.glob('*.xpt')])
+
+    # Look for ZIP files in the input_dir (e.g. data/raw/chicago) so we can
+    # extract them to 'extracted/' automatically
     zip_files = sorted(input_dir.glob('*.zip'))
-    
-    # Extract ZIP files to get XPT files
+
+    # If there are ZIPs, ensure extracted_dir exists and extract XPTs there
     if zip_files:
-        print(f"[INFO] Found {len(zip_files)} ZIP files, extracting...")
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[INFO] Found {len(zip_files)} ZIP files in {input_dir}, extracting to {extracted_dir}...")
         for zip_file in zip_files:
             try:
                 xpt_file = extract_xpt_from_zip(zip_file)
+                # If extraction returned a path in the zip parent, move it into
+                # the extracted/ folder so all .xpt files are co-located
+                dest = extracted_dir / xpt_file.name
+                if xpt_file.exists() and xpt_file.parent != extracted_dir:
+                    try:
+                        xpt_file.replace(dest)
+                        xpt_file = dest
+                    except Exception:
+                        # fallback: leave where it was
+                        pass
+
                 if xpt_file not in xpt_files:
                     xpt_files.append(xpt_file)
                     xpt_files = sorted(xpt_files)
