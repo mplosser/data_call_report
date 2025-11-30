@@ -1,3 +1,7 @@
+## Requirements
+
+ pip install -r requirements.txt
+ ```
 # Call Reports Data Acquisition Pipeline
 
 This folder contains scripts for downloading and extracting FFIEC Call Report data (1985-2025).
