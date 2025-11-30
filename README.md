@@ -46,6 +46,22 @@ Requires manual download from FFIEC:
 
 Convert downloaded files to standardized parquet format:
 
+#### Default input/output locations and behaviour
+
+- parse_chicago.py (default):
+  - Input: `data/raw/chicago` — the script will search both this directory and
+    an `extracted/` subdirectory for `.zip` and `.xpt` files. If ZIPs are found
+    in `data/raw/chicago` they will be extracted into `data/raw/chicago/extracted`.
+  - Output: `data/processed`
+
+- parse_ffiec.py (default):
+  - Input: `data/raw/ffiec` — expects bulk FFIEC files (text or zip).
+  - Output: `data/processed`
+
+These defaults let you run the parsers without any flags when you place files
+into the repository layout shown above. You can still override with
+`--input-dir` and `--output-dir` when you need custom locations.
+
 #### A. Extract and Parse Chicago Fed Data
 
 ```bash
