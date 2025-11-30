@@ -1,4 +1,4 @@
-# Call Reports Data Acquisition Pipeline
+# Call Report Data Acquisition Pipeline
 
 This folder contains scripts for downloading and extracting FFIEC Call Report data (1985-2025).
 
