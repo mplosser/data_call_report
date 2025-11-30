@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    name: Quick checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Python compile check
+        run: |
+          python -m py_compile download.py parse_chicago.py parse_ffiec.py summarize.py
+
+      - name: Ensure data placeholders exist
+        run: |
+          python - <<'PY'
+          import sys
+          from pathlib import Path
+
+          missing = []
+          bases = [Path('data/raw'), Path('data/processed')]
+
+          for base in bases:
+              if not base.exists():
+                  missing.append(f"{base} (directory missing)")
+                  continue
+
+              # look for any .gitkeep anywhere under this base
+              found = any(base.rglob('.gitkeep'))
+              if not found:
+                  missing.append(f"{base} (no .gitkeep in tree)")
+
+          if missing:
+              print('Missing data placeholders:')
+              for m in missing:
+                  print('  -', m)
+              sys.exit(1)
+
+          print('All required data placeholder files present (ok)')
+          PY
