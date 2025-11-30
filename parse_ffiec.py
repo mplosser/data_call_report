@@ -346,11 +346,15 @@ def main():
         description='Parse FFIEC bulk download files to parquet format'
     )
 
-    group = parser.add_mutually_exclusive_group(required=True)
+    # Make the input arguments optional and provide sensible defaults so the
+    # script can be run without flags when files are placed in the repository
+    # layout's default locations.
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument(
         '--input-dir',
         type=str,
-        help='Directory containing bulk download files'
+        default='data/raw/ffiec',
+        help='Directory containing bulk download files (default: data/raw/ffiec)'
     )
     group.add_argument(
         '--input-file',
@@ -361,8 +365,8 @@ def main():
     parser.add_argument(
         '--output-dir',
         type=str,
-        required=True,
-        help='Directory to save parsed parquet files'
+        default='data/processed',
+        help='Directory to save parsed parquet files (default: data/processed)'
     )
 
     args = parser.parse_args()
