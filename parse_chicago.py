@@ -1,7 +1,7 @@
 """
 parse_chicago.py
 
-Stage 1: Parse raw data from Chicago Fed SAS XPORT files.
+Extracts zip files and parses raw data from Chicago Fed SAS XPORT files.
 Preserves ALL MDRM codes without filtering or renaming.
 
 Usage:
@@ -17,6 +17,7 @@ from tqdm import tqdm
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+import zipfile
 
 warnings.filterwarnings('ignore')
 
@@ -64,7 +65,37 @@ def infer_reporting_period_from_filename(filename):
 
     return None
 
-
+def extract_xpt_from_zip(zip_path):
+    """
+    Extract .xpt file from Chicago Fed ZIP archive.
+    
+    Chicago Fed ZIPs contain a single .xpt file (e.g., call8503.xpt).
+    
+    Args:
+        zip_path: Path to ZIP file
+        
+    Returns:
+        Path to extracted .xpt file in same directory as ZIP
+    """
+    zip_path = Path(zip_path)
+    
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        # Find .xpt file in ZIP
+        xpt_files = [f for f in zf.namelist() if f.lower().endswith('.xpt')]
+        
+        if not xpt_files:
+            raise ValueError(f"No .xpt file found in {zip_path}")
+        
+        # Extract XPT to same directory as ZIP
+        xpt_filename = xpt_files[0]
+        extract_path = zip_path.parent / xpt_filename
+        
+        # Skip if already extracted
+        if not extract_path.exists():
+            zf.extract(xpt_filename, zip_path.parent)
+        
+        return extract_path
+    
 def extract_raw_quarter(sas_file_path, reporting_period):
     """
     Extract all data from a single SAS XPORT file.
@@ -202,9 +233,22 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Find all .xpt files
+    # Find all .xpt files and .zip files
     xpt_files = sorted(input_dir.glob('*.xpt'))
-
+    zip_files = sorted(input_dir.glob('*.zip'))
+    
+    # Extract ZIP files to get XPT files
+    if zip_files:
+        print(f"[INFO] Found {len(zip_files)} ZIP files, extracting...")
+        for zip_file in zip_files:
+            try:
+                xpt_file = extract_xpt_from_zip(zip_file)
+                if xpt_file not in xpt_files:
+                    xpt_files.append(xpt_file)
+                    xpt_files = sorted(xpt_files)
+            except Exception as e:
+                print(f"[WARN] Failed to extract {zip_file.name}: {e}")
+    
     if not xpt_files:
         print(f"[ERROR] No .xpt files found in {input_dir}")
         return

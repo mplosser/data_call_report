@@ -46,11 +46,11 @@ Requires manual download from FFIEC:
 
 Convert downloaded files to standardized parquet format:
 
-#### A. Extract Chicago Fed Data
+#### A. Extract and Parse Chicago Fed Data
 
 ```bash
 python parse_chicago.py \
-  --input-dir data/raw/chicago/extracted \
+  --input-dir data/raw/chicago \
   --output-dir data/processed
 ```
 
@@ -111,7 +111,7 @@ data/processed/
 python summarize.py --input-dir data/processed
 
 # Limit to 4 workers
-python parse_chicago.py --input-dir data/raw/chicago/extracted --output-dir data/processed --workers 4
+python parse_chicago.py --input-dir data/raw/chicago --output-dir data/processed --workers 4
 
 # Disable parallelization (for low-memory systems)
 python parse_ffiec.py --input-dir data/raw/ffiec --output-dir data/processed --no-parallel
