@@ -28,7 +28,6 @@ data/processed/
 # IDE
 .vscode/
 .idea/
-.claude/
 *.swp
 *.swo
 *~
@@ -36,3 +35,10 @@ data/processed/
 # Environment variables
 .env
 
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.venv.lock
+.python-version
