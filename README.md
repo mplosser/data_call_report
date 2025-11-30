@@ -1,7 +1,3 @@
-## Requirements
-
- pip install -r requirements.txt
- ```
 # Call Reports Data Acquisition Pipeline
 
 This folder contains scripts for downloading and extracting FFIEC Call Report data (1985-2025).
@@ -9,6 +5,14 @@ This folder contains scripts for downloading and extracting FFIEC Call Report da
 ## Overview
 
 This downloads raw data and converts it to parquet format without any project-specific transformations.
+
+## Requirements
+
+Install required Python packages before running the scripts:
+
+```bash
+pip install -r requirements.txt
+```
 
 ## Two-Step Pipeline
 
