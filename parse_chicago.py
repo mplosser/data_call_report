@@ -1,17 +1,27 @@
 """
 parse_chicago.py
 
-Extracts zip files and parses raw data from Chicago Fed SAS XPORT files.
-Preserves ALL MDRM codes without filtering or renaming.
+Extracts Chicago Fed Call Report data and separates by entity type:
+- FFIEC_031_041/ - Commercial Banks (FFIEC 031/041) - ONLY for 1976-2010
+- FFIEC_002/ - Foreign Bank Branches (FFIEC 002)
+- FRB_2886b/ - Edge/Agreement Corporations (FR 2886b)
+
+Handles two types of Chicago Fed data:
+- Historical Call Reports (1976-2010): All entity types (FFIEC_031_041, FFIEC_002, FRB_2886b)
+- Structure Data (2011-2021Q2): FFIEC_002 and FRB_2886b ONLY
+  (FFIEC_031_041 is excluded for 2011+ as it has only ~194 variables vs ~1,000 in FFIEC CDR)
+
+ZIP Extraction:
+- Automatically extracts ZIP files to {input-dir}/extracted/
+- Original ZIP files are preserved
+- Use cleanup.py to delete extracted files and free disk space
 
 Usage:
-    # Default behaviour: look in data/raw/chicago and its 'extracted/' subfolder
-    # for ZIP and XPT files. ZIPs are extracted into 'extracted/' automatically.
+    # Parse all Chicago Fed data (auto-extracts ZIPs)
     python parse_chicago.py
 
-    # Or specify input/output explicitly (you can point to 'data/raw/chicago' or
-    # 'data/raw/chicago/extracted'):
-    python parse_chicago.py --input-dir data/raw/chicago --output-dir data/processed
+    # Parse specific date range
+    python parse_chicago.py --start-date 2000-01-01 --end-date 2021-12-31
 """
 
 import pandas as pd
@@ -21,41 +31,44 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 import warnings
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing
 import zipfile
+from collections import defaultdict
 
 warnings.filterwarnings('ignore')
 
+# Entity type mappings
+ENTITY_TYPES = {
+    'FFIEC_031_041': {
+        'name': 'Commercial Banks (FFIEC 031/041)',
+        'rssd9331_values': [1],
+        'description': 'Commercial banks filing FFIEC 031/041 call reports'
+    },
+    'FFIEC_002': {
+        'name': 'Foreign Bank Branches (FFIEC 002)',
+        'rssd9331_values': [10, 11],
+        'description': 'U.S. branches and agencies of foreign banks'
+    },
+    'FRB_2886b': {
+        'name': 'Edge/Agreement Corporations (FR 2886b)',
+        'rssd9331_values': [13, 17],
+        'description': 'Edge and Agreement corporations'
+    }
+}
+
 
 def infer_reporting_period_from_filename(filename):
-    """
-    Extract reporting period from Chicago Fed filename.
-
-    Examples:
-        call9203.xpt -> 1992-03-31
-        calp8503.xpt -> 1985-03-31
-        CALL0012.xpt -> 2000-12-31
-
-    Returns:
-        pd.Timestamp or None
-    """
+    """Extract reporting period from Chicago Fed filename."""
     filename_lower = str(filename).lower()
-
-    # Chicago Fed patterns: call9203.xpt, calp8503.xpt, etc.
     chicago_match = re.search(r'call?p?(\d{2})(\d{2})', filename_lower)
     if chicago_match:
         year_2digit = int(chicago_match.group(1))
         month = int(chicago_match.group(2))
 
-        # Convert 2-digit year to 4-digit year
-        # 76-99 = 1976-1999, 00-25 = 2000-2025
         if year_2digit >= 76:
             year = 1900 + year_2digit
         else:
             year = 2000 + year_2digit
 
-        # Last day of the month
         if month == 3:
             day = 31
         elif month == 6:
@@ -71,299 +84,205 @@ def infer_reporting_period_from_filename(filename):
 
     return None
 
+
 def extract_xpt_from_zip(zip_path):
-    """
-    Extract .xpt file from Chicago Fed ZIP archive.
-    
-    Chicago Fed ZIPs contain a single .xpt file (e.g., call8503.xpt).
-    
-    Args:
-        zip_path: Path to ZIP file
-        
-    Returns:
-        Path to extracted .xpt file in same directory as ZIP
-    """
+    """Extract .xpt file from Chicago Fed ZIP archive."""
     zip_path = Path(zip_path)
-    
+
     with zipfile.ZipFile(zip_path, 'r') as zf:
-        # Find .xpt file in ZIP
         xpt_files = [f for f in zf.namelist() if f.lower().endswith('.xpt')]
-        
+
         if not xpt_files:
             raise ValueError(f"No .xpt file found in {zip_path}")
-        
-        # Extract XPT to same directory as ZIP
+
         xpt_filename = xpt_files[0]
         extract_path = zip_path.parent / xpt_filename
-        
-        # Skip if already extracted
+
         if not extract_path.exists():
             zf.extract(xpt_filename, zip_path.parent)
-        
+
         return extract_path
-    
-def extract_raw_quarter(sas_file_path, reporting_period):
+
+
+def process_quarter(xpt_file, reporting_period, output_dir):
     """
-    Extract all data from a single SAS XPORT file.
-
-    Args:
-        sas_file_path: Path to .xpt file
-        reporting_period: pd.Timestamp for the quarter
-
-    Returns:
-        DataFrame with ALL columns preserved (MDRM codes as column names)
+    Read XPT file, split by entity type, and write parquet files immediately.
+    Returns: Dict[entity_type, record_count]
     """
     try:
-        # Read SAS XPORT file - try multiple encodings
+        # Read SAS XPORT file
         encodings_to_try = [None, 'latin1', 'cp1252', 'iso-8859-1']
         df = None
 
         for encoding in encodings_to_try:
             try:
                 if encoding is None:
-                    df, meta = pyreadstat.read_xport(str(sas_file_path))
+                    df, meta = pyreadstat.read_xport(str(xpt_file))
                 else:
-                    df, meta = pyreadstat.read_xport(str(sas_file_path), encoding=encoding)
-                break  # Success!
+                    df, meta = pyreadstat.read_xport(str(xpt_file), encoding=encoding)
+                break
             except (UnicodeDecodeError, ValueError):
-                if encoding == encodings_to_try[-1]:  # Last attempt
+                if encoding == encodings_to_try[-1]:
                     raise
                 continue
 
         if df is None:
             raise ValueError("Could not read file with any encoding")
 
-        # Add metadata columns
+        # Add metadata
         df['reporting_period'] = reporting_period
 
-        # Ensure RSSD_ID or IDRSSD column exists
-        # Priority order: RSSD9001 (Fed ID), IDRSSD, RSSD_ID
+        # Ensure RSSD_ID exists
         if 'RSSD9001' in df.columns:
             df['RSSD_ID'] = df['RSSD9001']
         elif 'IDRSSD' in df.columns:
             df['RSSD_ID'] = df['IDRSSD']
         elif 'RSSD_ID' not in df.columns:
-            # Last resort: look for other RSSD columns (but skip date columns)
             for col in df.columns:
                 col_upper = col.upper()
-                # Skip columns that are likely dates (RSSD9999, etc.)
                 if col_upper in ['RSSD9999', 'RSSDDATE']:
                     continue
                 if 'RSSD' in col_upper:
                     df['RSSD_ID'] = df[col]
-                    print(f"[WARN] Using {col} as RSSD_ID for {sas_file_path.name}")
                     break
 
-        # Convert column names to uppercase for consistency
+        # Convert to uppercase
         df.columns = df.columns.str.upper()
 
-        # Move metadata columns to front
-        cols = df.columns.tolist()
-        metadata_cols = ['REPORTING_PERIOD', 'RSSD_ID']
-        other_cols = [c for c in cols if c not in metadata_cols]
-        df = df[[c for c in metadata_cols if c in cols] + other_cols]
+        # Check if RSSD9331 exists
+        if 'RSSD9331' not in df.columns:
+            return {}
 
-        return df
-
-    except Exception as e:
-        print(f"[ERROR] Failed to read {sas_file_path.name}: {e}")
-        return None
-
-
-def process_file_wrapper(args_tuple):
-    """
-    Wrapper function for parallel processing.
-
-    Args:
-        args_tuple: (file_path_str, output_dir_str, start_date_str, end_date_str)
-
-    Returns:
-        Tuple of (status, quarter_str, message)
-    """
-    file_path_str, output_dir_str, start_date_str, end_date_str = args_tuple
-
-    xpt_file = Path(file_path_str)
-    output_dir = Path(output_dir_str)
-    start_date = pd.Timestamp(start_date_str) if start_date_str else None
-    end_date = pd.Timestamp(end_date_str) if end_date_str else None
-
-    try:
-        # Infer reporting period
-        reporting_period = infer_reporting_period_from_filename(xpt_file.name)
-
-        if reporting_period is None:
-            return ('skipped', None, f"Could not infer date from {xpt_file.name}")
-
-        # Check date filters
-        if start_date and reporting_period < start_date:
-            return ('skipped', None, f"Before start date: {reporting_period}")
-        if end_date and reporting_period > end_date:
-            return ('skipped', None, f"After end date: {reporting_period}")
-
-        # Extract data
-        df = extract_raw_quarter(xpt_file, reporting_period)
-
-        if df is None:
-            return ('error', None, f"Failed to extract data from {xpt_file.name}")
-
-        # Save as parquet
         quarter_str = f"{reporting_period.year}Q{reporting_period.quarter}"
-        output_path = output_dir / f"{quarter_str}.parquet"
+        results = {}
 
-        df.to_parquet(output_path, index=False, compression='snappy')
+        # Split by entity type and write immediately
+        for entity_type, config in ENTITY_TYPES.items():
+            # Skip FFIEC_031_041 for quarters after 2010Q4
+            if entity_type == 'FFIEC_031_041' and reporting_period > pd.Timestamp('2010-12-31'):
+                continue
 
-        return ('success', quarter_str, f"Processed {len(df)} rows")
+            entity_df = df[df['RSSD9331'].isin(config['rssd9331_values'])].copy()
+
+            if len(entity_df) > 0:
+                # Move metadata columns to front
+                cols = entity_df.columns.tolist()
+                metadata_cols = ['REPORTING_PERIOD', 'RSSD_ID']
+                other_cols = [c for c in cols if c not in metadata_cols]
+                entity_df = entity_df[[c for c in metadata_cols if c in cols] + other_cols]
+
+                # Write immediately
+                entity_output_dir = output_dir / entity_type
+                entity_output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = entity_output_dir / f"{quarter_str}.parquet"
+                entity_df.to_parquet(output_path, index=False, compression='snappy')
+
+                results[entity_type] = len(entity_df)
+
+        return results
 
     except Exception as e:
-        return ('error', None, f"Error processing {xpt_file.name}: {e}")
+        print(f"\n[ERROR] Failed to process {xpt_file.name}: {e}")
+        return {}
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Extract raw Chicago Fed data to Parquet')
+    parser = argparse.ArgumentParser(description='Extract Chicago Fed data by entity type')
     parser.add_argument('--input-dir', type=str, default='data/raw/chicago',
-                        help='Directory containing raw ZIPs or extracted .xpt files (default: data/raw/chicago)')
+                        help='Directory containing raw ZIPs or extracted .xpt files')
     parser.add_argument('--output-dir', type=str, default='data/processed',
-                        help='Directory to save raw quarterly parquet files (default: data/processed)')
+                        help='Base output directory')
     parser.add_argument('--start-date', type=str, default=None,
-                        help='Start date (YYYY-MM-DD), optional')
+                        help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, default=None,
-                        help='End date (YYYY-MM-DD), optional')
-    parser.add_argument('--no-parallel', action='store_true',
-                        help='Disable parallel processing (slower but uses less memory)')
-    parser.add_argument('--workers', type=int, default=None,
-                        help='Number of parallel workers (default: number of CPU cores)')
+                        help='End date (YYYY-MM-DD)')
 
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
-    # We accept either an input directory containing extracted .xpt files
-    # (e.g. data/raw/chicago/extracted) OR the parent directory that contains
-    # ZIP archives (e.g. data/raw/chicago). We'll search both locations so the
-    # script works for either workflow.
-
+    # Find XPT files
     extracted_dir = input_dir / 'extracted'
+    xpt_files = sorted([p for p in input_dir.glob('*.xpt')] +
+                      ([p for p in extracted_dir.glob('*.xpt')] if extracted_dir.exists() else []))
 
-    # Collect xpt files from both input_dir (in case .xpt were placed there) and
-    # extracted_dir if present
-    xpt_files = sorted([p for p in input_dir.glob('*.xpt')] + [p for p in extracted_dir.glob('*.xpt')] if extracted_dir.exists() else [p for p in input_dir.glob('*.xpt')])
-
-    # Look for ZIP files in the input_dir (e.g. data/raw/chicago) so we can
-    # extract them to 'extracted/' automatically
+    # Extract ZIPs if present
     zip_files = sorted(input_dir.glob('*.zip'))
-
-    # If there are ZIPs, ensure extracted_dir exists and extract XPTs there
     if zip_files:
         extracted_dir.mkdir(parents=True, exist_ok=True)
-        print(f"[INFO] Found {len(zip_files)} ZIP files in {input_dir}, extracting to {extracted_dir}...")
-        for zip_file in zip_files:
+        print(f"\n[INFO] Found {len(zip_files)} ZIP files in {input_dir}, extracting to {extracted_dir}...")
+        for zip_file in tqdm(zip_files, desc="Extracting raw data"):
             try:
                 xpt_file = extract_xpt_from_zip(zip_file)
-                # If extraction returned a path in the zip parent, move it into
-                # the extracted/ folder so all .xpt files are co-located
                 dest = extracted_dir / xpt_file.name
                 if xpt_file.exists() and xpt_file.parent != extracted_dir:
-                    try:
-                        xpt_file.replace(dest)
-                        xpt_file = dest
-                    except Exception:
-                        # fallback: leave where it was
-                        pass
-
+                    xpt_file.replace(dest)
+                    xpt_file = dest
                 if xpt_file not in xpt_files:
                     xpt_files.append(xpt_file)
                     xpt_files = sorted(xpt_files)
             except Exception as e:
                 print(f"[WARN] Failed to extract {zip_file.name}: {e}")
-    
+
     if not xpt_files:
         print(f"[ERROR] No .xpt files found in {input_dir}")
         return
 
-    # Determine number of workers
-    if args.workers:
-        num_workers = args.workers
-    else:
-        num_workers = multiprocessing.cpu_count()
+    # Filter by date
+    start_date = pd.Timestamp(args.start_date) if args.start_date else None
+    end_date = pd.Timestamp(args.end_date) if args.end_date else None
 
-    print(f"\n[INFO] Found {len(xpt_files)} SAS XPORT files")
-    if not args.no_parallel:
-        print(f"[INFO] Using {num_workers} parallel workers")
+    filtered_files = []
+    for xpt_file in xpt_files:
+        reporting_period = infer_reporting_period_from_filename(xpt_file.name)
+        if reporting_period is None:
+            continue
+        if start_date and reporting_period < start_date:
+            continue
+        if end_date and reporting_period > end_date:
+            continue
+        filtered_files.append((xpt_file, reporting_period))
 
-    processed_count = 0
-    skipped_count = 0
-    error_count = 0
+    # Sort by date
+    filtered_files.sort(key=lambda x: x[1])
 
-    if args.no_parallel:
-        # Sequential processing (original logic)
-        start_date = pd.Timestamp(args.start_date) if args.start_date else None
-        end_date = pd.Timestamp(args.end_date) if args.end_date else None
+    if not filtered_files:
+        print(f"[ERROR] No files found in date range")
+        return
 
-        for xpt_file in tqdm(xpt_files, desc="Extracting raw data"):
-            reporting_period = infer_reporting_period_from_filename(xpt_file.name)
+    print(f"\n{'='*80}")
+    print(f"CHICAGO FED DATA EXTRACTION")
+    print(f"{'='*80}")
+    print(f"Files to process: {len(filtered_files)}")
+    print(f"Output structure:")
+    for entity_type, config in ENTITY_TYPES.items():
+        print(f"  {output_dir / entity_type}/ - {config['name']}")
+    print(f"{'='*80}\n")
 
-            if reporting_period is None:
-                print(f"\n[WARN] Could not infer date from {xpt_file.name}, skipping")
-                skipped_count += 1
-                continue
+    # Process files - single pass: read, split, write immediately
+    stats = defaultdict(lambda: {'processed': 0, 'total_records': 0})
 
-            if start_date and reporting_period < start_date:
-                skipped_count += 1
-                continue
-            if end_date and reporting_period > end_date:
-                skipped_count += 1
-                continue
+    for xpt_file, reporting_period in tqdm(filtered_files, desc="Processing quarters"):
+        results = process_quarter(xpt_file, reporting_period, output_dir)
 
-            df = extract_raw_quarter(xpt_file, reporting_period)
+        for entity_type, record_count in results.items():
+            stats[entity_type]['processed'] += 1
+            stats[entity_type]['total_records'] += record_count
 
-            if df is None:
-                error_count += 1
-                continue
+    # Print summary
+    print(f"\n{'='*80}")
+    print("EXTRACTION COMPLETE")
+    print(f"{'='*80}")
 
-            quarter_str = f"{reporting_period.year}Q{reporting_period.quarter}"
-            output_path = output_dir / f"{quarter_str}.parquet"
+    for entity_type, config in ENTITY_TYPES.items():
+        if stats[entity_type]['processed'] > 0:
+            print(f"\n{config['name']}:")
+            print(f"  Output: {output_dir / entity_type}")
+            print(f"  Quarters: {stats[entity_type]['processed']}")
+            print(f"  Total records: {stats[entity_type]['total_records']:,}")
 
-            df.to_parquet(output_path, index=False, compression='snappy')
-            processed_count += 1
-    else:
-        # Parallel processing
-        print("[INFO] Processing files in parallel...")
-
-        # Prepare arguments for parallel processing
-        file_args = [(str(xpt_file), str(output_dir), args.start_date, args.end_date)
-                     for xpt_file in xpt_files]
-
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(process_file_wrapper, args): args for args in file_args}
-
-            completed = 0
-            for future in as_completed(futures):
-                completed += 1
-                if completed % 10 == 0:
-                    print(f"  Processed {completed}/{len(xpt_files)} files...")
-
-                status, quarter_str, message = future.result()
-
-                if status == 'success':
-                    processed_count += 1
-                elif status == 'skipped':
-                    skipped_count += 1
-                elif status == 'error':
-                    print(f"\n[ERROR] {message}")
-                    error_count += 1
-
-        print(f"  Completed all {len(xpt_files)} files")
-
-    print(f"\n{'='*60}")
-    print(f"EXTRACTION COMPLETE")
-    print(f"{'='*60}")
-    print(f"Processed: {processed_count} quarters")
-    print(f"Skipped: {skipped_count} files")
-    print(f"Errors: {error_count} files")
-    print(f"Output directory: {output_dir}")
-    print(f"{'='*60}\n")
+    print(f"\n{'='*80}\n")
 
 
 if __name__ == '__main__':

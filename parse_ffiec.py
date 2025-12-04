@@ -3,15 +3,14 @@ parse_ffiec.py
 
 Parse FFIEC bulk download tab-delimited files and convert to parquet format.
 
-The bulk download files contain all banks and all schedules for a single quarter
-in tab-delimited format. This script converts them to the same parquet format
-as the API-based approach for compatibility.
+The bulk download files contain FFIEC 031/041 commercial banks for a single quarter
+in tab-delimited format. Output is saved to FFIEC_031_041/ subdirectory.
 
 Usage:
-    python parse_ffiec.py --input-dir data/raw/ffiec/ --output-dir data/processed
+    python parse_ffiec.py
 
-    # Parse a single file
-    python parse_ffiec.py --input-file data/raw/ffiec/FFIEC_20240630.txt --output-dir data/processed
+Output structure:
+    data/processed/FFIEC_031_041/2024Q2.parquet
 
 """
 
@@ -317,8 +316,12 @@ def process_file_wrapper(args_tuple):
         if quarter_str is None:
             return ('error', None, f"Could not extract quarter from {file_path.name}")
 
+        # FFIEC data goes into FFIEC_031_041 subdirectory (commercial banks only)
+        entity_output_dir = output_dir / 'FFIEC_031_041'
+        entity_output_dir.mkdir(parents=True, exist_ok=True)
+
         # Check if already processed
-        output_path = output_dir / f"{quarter_str}.parquet"
+        output_path = entity_output_dir / f"{quarter_str}.parquet"
         if output_path.exists():
             return ('skipped', quarter_str, "Already exists")
 
@@ -375,6 +378,10 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # FFIEC data goes into FFIEC_031_041 subdirectory (commercial banks only)
+    entity_output_dir = output_dir / 'FFIEC_031_041'
+    entity_output_dir.mkdir(parents=True, exist_ok=True)
+
     # Get list of files to process
     if args.input_file:
         files_to_process = [Path(args.input_file)]
@@ -396,7 +403,7 @@ def main():
     print(f"FFIEC BULK FILE PARSER")
     print(f"{'='*60}")
     print(f"Files to process: {len(files_to_process)}")
-    print(f"Output directory: {output_dir}")
+    print(f"Output directory: {entity_output_dir}")
     print(f"{'='*60}\n")
 
     processed_count = 0
@@ -412,7 +419,7 @@ def main():
             continue
 
         # Check if already processed
-        output_path = output_dir / f"{quarter_str}.parquet"
+        output_path = entity_output_dir / f"{quarter_str}.parquet"
         if output_path.exists():
             print(f"[{quarter_str}] Already exists, skipping")
             processed_count += 1
@@ -452,7 +459,7 @@ def main():
     print(f"{'='*60}")
     print(f"Processed: {processed_count} files")
     print(f"Errors: {error_count} files")
-    print(f"Output directory: {output_dir}")
+    print(f"Output directory: {entity_output_dir}")
     print(f"{'='*60}\n")
 
 
