@@ -13,6 +13,9 @@ Variable Descriptions:
 Usage:
     python 05_parse_ffiec.py
 
+    # Force re-processing of existing files
+    python 05_parse_ffiec.py --force
+
 Output structure:
     data/processed/FFIEC_031_041/2024Q2.parquet
 
@@ -431,6 +434,11 @@ def main():
         default='data/processed',
         help='Directory to save parsed parquet files (default: data/processed)'
     )
+    parser.add_argument(
+        '--force', '-f',
+        action='store_true',
+        help='Overwrite existing output files'
+    )
 
     args = parser.parse_args()
 
@@ -475,6 +483,7 @@ def main():
     print(f"{'='*60}\n")
 
     processed_count = 0
+    skipped_count = 0
     error_count = 0
 
     for file_path in files_to_process:
@@ -488,9 +497,9 @@ def main():
 
         # Check if already processed
         output_path = entity_output_dir / f"{quarter_str}.parquet"
-        if output_path.exists():
-            print(f"[{quarter_str}] Already exists, skipping")
-            processed_count += 1
+        if output_path.exists() and not args.force:
+            print(f"[{quarter_str}] Already exists, skipping (use --force to overwrite)")
+            skipped_count += 1
             continue
 
         print(f"[{quarter_str}] Processing {file_path.name}...")
@@ -526,6 +535,8 @@ def main():
     print(f"PARSING COMPLETE")
     print(f"{'='*60}")
     print(f"Processed: {processed_count} files")
+    if skipped_count > 0:
+        print(f"Skipped (already exist): {skipped_count} files")
     print(f"Errors: {error_count} files")
     print(f"Output directory: {entity_output_dir}")
     print(f"{'='*60}\n")

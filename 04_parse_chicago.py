@@ -26,6 +26,9 @@ Usage:
 
     # Parse specific date range
     python 04_parse_chicago.py --start-date 2000-01-01 --end-date 2021-12-31
+
+    # Force re-processing of existing files
+    python 04_parse_chicago.py --force
 """
 
 import pandas as pd
@@ -164,11 +167,26 @@ def extract_xpt_from_zip(zip_path):
         return extract_path
 
 
-def process_quarter(xpt_file, reporting_period, output_dir, descriptions):
+def process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=False):
     """
     Read XPT file, split by entity type, and write parquet files immediately.
-    Returns: Dict[entity_type, record_count]
+    Returns: Dict[entity_type, record_count] - returns 'skipped' for skipped files
     """
+    quarter_str = f"{reporting_period.year}Q{reporting_period.quarter}"
+
+    # Check if all output files already exist (skip if not forcing)
+    if not force:
+        all_exist = True
+        for entity_type, config in ENTITY_TYPES.items():
+            if entity_type == 'FFIEC_031_041' and reporting_period > pd.Timestamp('2010-12-31'):
+                continue
+            output_path = output_dir / entity_type / f"{quarter_str}.parquet"
+            if not output_path.exists():
+                all_exist = False
+                break
+        if all_exist:
+            return 'skipped'
+
     try:
         # Read SAS XPORT file
         encodings_to_try = [None, 'latin1', 'cp1252', 'iso-8859-1']
@@ -213,7 +231,6 @@ def process_quarter(xpt_file, reporting_period, output_dir, descriptions):
         if 'RSSD9331' not in df.columns:
             return {}
 
-        quarter_str = f"{reporting_period.year}Q{reporting_period.quarter}"
         results = {}
 
         # Split by entity type and write immediately
@@ -256,6 +273,8 @@ def main():
                         help='Start date (YYYY-MM-DD)')
     parser.add_argument('--end-date', type=str, default=None,
                         help='End date (YYYY-MM-DD)')
+    parser.add_argument('--force', '-f', action='store_true',
+                        help='Overwrite existing output files')
 
     args = parser.parse_args()
 
@@ -329,14 +348,18 @@ def main():
     print(f"{'='*80}\n")
 
     # Process files - single pass: read, split, write immediately
-    stats = defaultdict(lambda: {'processed': 0, 'total_records': 0})
+    stats = defaultdict(lambda: {'processed': 0, 'total_records': 0, 'skipped': 0})
 
     for xpt_file, reporting_period in tqdm(filtered_files, desc="Processing quarters"):
-        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions)
+        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=args.force)
 
-        for entity_type, record_count in results.items():
-            stats[entity_type]['processed'] += 1
-            stats[entity_type]['total_records'] += record_count
+        if results == 'skipped':
+            for entity_type in ENTITY_TYPES:
+                stats[entity_type]['skipped'] += 1
+        else:
+            for entity_type, record_count in results.items():
+                stats[entity_type]['processed'] += 1
+                stats[entity_type]['total_records'] += record_count
 
     # Print summary
     print(f"\n{'='*80}")
@@ -344,10 +367,12 @@ def main():
     print(f"{'='*80}")
 
     for entity_type, config in ENTITY_TYPES.items():
-        if stats[entity_type]['processed'] > 0:
+        if stats[entity_type]['processed'] > 0 or stats[entity_type]['skipped'] > 0:
             print(f"\n{config['name']}:")
             print(f"  Output: {output_dir / entity_type}")
-            print(f"  Quarters: {stats[entity_type]['processed']}")
+            print(f"  Processed: {stats[entity_type]['processed']} quarters")
+            if stats[entity_type]['skipped'] > 0:
+                print(f"  Skipped (already exist): {stats[entity_type]['skipped']} quarters")
             print(f"  Total records: {stats[entity_type]['total_records']:,}")
 
     print(f"\n{'='*80}\n")
