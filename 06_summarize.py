@@ -1,5 +1,5 @@
 """
-summarize.py
+06_summarize.py
 
 Summarize the contents of parsed Call Report parquet files.
 
@@ -12,16 +12,16 @@ Shows combined quarterly breakdown by entity type:
 Detects gaps in quarterly coverage per entity type (not end of series).
 
 Usage:
-    python summarize.py --input-dir data/processed
+    python 06_summarize.py
 
     # With date filters
-    python summarize.py --input-dir /data/processed --start-date 2020-01-01 --end-date 2024-12-31
+    python 06_summarize.py --start-date 2020-01-01 --end-date 2024-12-31
 
     # Export to CSV
-    python summarize.py --input-dir /data/processed --output summary.csv
+    python 06_summarize.py --output summary.csv
 
     # Disable parallel processing (slower but uses less memory)
-    python summarize.py --input-dir /data/processed --no-parallel
+    python 06_summarize.py --no-parallel
 """
 
 import pandas as pd

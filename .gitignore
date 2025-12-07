@@ -1,6 +1,7 @@
-# Raw and processed data (ignore large data files but keep directory placeholders)
+# Raw, processed, and dictionary data (ignore large data files but keep directory placeholders)
 data/raw/
 data/processed/
+data/dictionary/
 
 # Large binary data formats
 *.parquet

@@ -1,5 +1,5 @@
 """
-parse_chicago.py
+04_parse_chicago.py
 
 Extracts Chicago Fed Call Report data and separates by entity type:
 - FFIEC_031_041/ - Commercial Banks (FFIEC 031/041) - ONLY for 1976-2010
@@ -11,21 +11,27 @@ Handles two types of Chicago Fed data:
 - Structure Data (2011-2021Q2): FFIEC_002 and FRB_2886b ONLY
   (FFIEC_031_041 is excluded for 2011+ as it has only ~194 variables vs ~1,000 in FFIEC CDR)
 
+Variable Descriptions:
+- If data_dictionary.parquet exists, adds MDRM variable descriptions as
+  parquet column metadata (similar to Stata variable labels)
+
 ZIP Extraction:
 - Automatically extracts ZIP files to {input-dir}/extracted/
 - Original ZIP files are preserved
-- Use cleanup.py to delete extracted files and free disk space
+- Use 07_cleanup.py to delete extracted files and free disk space
 
 Usage:
     # Parse all Chicago Fed data (auto-extracts ZIPs)
-    python parse_chicago.py
+    python 04_parse_chicago.py
 
     # Parse specific date range
-    python parse_chicago.py --start-date 2000-01-01 --end-date 2021-12-31
+    python 04_parse_chicago.py --start-date 2000-01-01 --end-date 2021-12-31
 """
 
 import pandas as pd
 import pyreadstat
+import pyarrow as pa
+import pyarrow.parquet as pq
 import argparse
 import re
 from pathlib import Path
@@ -35,6 +41,60 @@ import zipfile
 from collections import defaultdict
 
 warnings.filterwarnings('ignore')
+
+# Global dictionary cache (loaded once, used for all files)
+VARIABLE_DESCRIPTIONS = {}
+
+
+def load_data_dictionary(dict_path: Path = None) -> dict:
+    """Load variable descriptions from data dictionary."""
+    global VARIABLE_DESCRIPTIONS
+
+    if VARIABLE_DESCRIPTIONS:
+        return VARIABLE_DESCRIPTIONS
+
+    if dict_path is None:
+        dict_path = Path('data/dictionary/data_dictionary.parquet')
+
+    if not dict_path.exists():
+        return {}
+
+    try:
+        df = pd.read_parquet(dict_path)
+        VARIABLE_DESCRIPTIONS = dict(zip(df['Variable'], df['Description']))
+        return VARIABLE_DESCRIPTIONS
+    except Exception as e:
+        print(f"[WARN] Could not load data dictionary: {e}")
+        return {}
+
+
+def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, descriptions: dict):
+    """Write DataFrame to parquet with column descriptions as metadata."""
+    # Convert to pyarrow table
+    table = pa.Table.from_pandas(df, preserve_index=False)
+
+    # Build new schema with descriptions
+    new_fields = []
+    for field in table.schema:
+        col_name = field.name
+        desc = descriptions.get(col_name.upper(), '')
+
+        if desc:
+            # Add description as field metadata
+            new_metadata = {b'description': desc.encode('utf-8')}
+            if field.metadata:
+                new_metadata.update(field.metadata)
+            new_field = pa.field(field.name, field.type, nullable=field.nullable, metadata=new_metadata)
+        else:
+            new_field = field
+
+        new_fields.append(new_field)
+
+    new_schema = pa.schema(new_fields, metadata=table.schema.metadata)
+    new_table = table.cast(new_schema)
+
+    # Write with snappy compression
+    pq.write_table(new_table, output_path, compression='snappy')
 
 # Entity type mappings
 ENTITY_TYPES = {
@@ -104,7 +164,7 @@ def extract_xpt_from_zip(zip_path):
         return extract_path
 
 
-def process_quarter(xpt_file, reporting_period, output_dir):
+def process_quarter(xpt_file, reporting_period, output_dir, descriptions):
     """
     Read XPT file, split by entity type, and write parquet files immediately.
     Returns: Dict[entity_type, record_count]
@@ -171,11 +231,11 @@ def process_quarter(xpt_file, reporting_period, output_dir):
                 other_cols = [c for c in cols if c not in metadata_cols]
                 entity_df = entity_df[[c for c in metadata_cols if c in cols] + other_cols]
 
-                # Write immediately
+                # Write immediately with metadata
                 entity_output_dir = output_dir / entity_type
                 entity_output_dir.mkdir(parents=True, exist_ok=True)
                 output_path = entity_output_dir / f"{quarter_str}.parquet"
-                entity_df.to_parquet(output_path, index=False, compression='snappy')
+                write_parquet_with_metadata(entity_df, output_path, descriptions)
 
                 results[entity_type] = len(entity_df)
 
@@ -251,6 +311,14 @@ def main():
         print(f"[ERROR] No files found in date range")
         return
 
+    # Load data dictionary for variable descriptions
+    descriptions = load_data_dictionary()
+    if descriptions:
+        print(f"[INFO] Loaded {len(descriptions):,} variable descriptions from data dictionary")
+    else:
+        print(f"[INFO] No data dictionary found - parquet files will not have variable descriptions")
+        print(f"       Run 02_download_dictionary.py and 03_parse_dictionary.py to add descriptions")
+
     print(f"\n{'='*80}")
     print(f"CHICAGO FED DATA EXTRACTION")
     print(f"{'='*80}")
@@ -264,7 +332,7 @@ def main():
     stats = defaultdict(lambda: {'processed': 0, 'total_records': 0})
 
     for xpt_file, reporting_period in tqdm(filtered_files, desc="Processing quarters"):
-        results = process_quarter(xpt_file, reporting_period, output_dir)
+        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions)
 
         for entity_type, record_count in results.items():
             stats[entity_type]['processed'] += 1

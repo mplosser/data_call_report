@@ -1,13 +1,17 @@
 """
-parse_ffiec.py
+05_parse_ffiec.py
 
 Parse FFIEC bulk download tab-delimited files and convert to parquet format.
 
 The bulk download files contain FFIEC 031/041 commercial banks for a single quarter
 in tab-delimited format. Output is saved to FFIEC_031_041/ subdirectory.
 
+Variable Descriptions:
+- If data_dictionary.parquet exists, adds MDRM variable descriptions as
+  parquet column metadata (similar to Stata variable labels)
+
 Usage:
-    python parse_ffiec.py
+    python 05_parse_ffiec.py
 
 Output structure:
     data/processed/FFIEC_031_041/2024Q2.parquet
@@ -16,6 +20,8 @@ Output structure:
 
 import argparse
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pathlib import Path
 import re
 from datetime import datetime
@@ -23,6 +29,60 @@ import zipfile
 import io
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+
+# Global dictionary cache (loaded once, used for all files)
+VARIABLE_DESCRIPTIONS = {}
+
+
+def load_data_dictionary(dict_path: Path = None) -> dict:
+    """Load variable descriptions from data dictionary."""
+    global VARIABLE_DESCRIPTIONS
+
+    if VARIABLE_DESCRIPTIONS:
+        return VARIABLE_DESCRIPTIONS
+
+    if dict_path is None:
+        dict_path = Path('data/dictionary/data_dictionary.parquet')
+
+    if not dict_path.exists():
+        return {}
+
+    try:
+        df = pd.read_parquet(dict_path)
+        VARIABLE_DESCRIPTIONS = dict(zip(df['Variable'], df['Description']))
+        return VARIABLE_DESCRIPTIONS
+    except Exception as e:
+        print(f"[WARN] Could not load data dictionary: {e}")
+        return {}
+
+
+def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, descriptions: dict):
+    """Write DataFrame to parquet with column descriptions as metadata."""
+    # Convert to pyarrow table
+    table = pa.Table.from_pandas(df, preserve_index=False)
+
+    # Build new schema with descriptions
+    new_fields = []
+    for field in table.schema:
+        col_name = field.name
+        desc = descriptions.get(col_name.upper(), '')
+
+        if desc:
+            # Add description as field metadata
+            new_metadata = {b'description': desc.encode('utf-8')}
+            if field.metadata:
+                new_metadata.update(field.metadata)
+            new_field = pa.field(field.name, field.type, nullable=field.nullable, metadata=new_metadata)
+        else:
+            new_field = field
+
+        new_fields.append(new_field)
+
+    new_schema = pa.schema(new_fields, metadata=table.schema.metadata)
+    new_table = table.cast(new_schema)
+
+    # Write with snappy compression
+    pq.write_table(new_table, output_path, compression='snappy')
 
 
 def extract_quarter_from_filename(filename):
@@ -399,6 +459,14 @@ def main():
         print("No files found to process")
         return
 
+    # Load data dictionary for variable descriptions
+    descriptions = load_data_dictionary()
+    if descriptions:
+        print(f"[INFO] Loaded {len(descriptions):,} variable descriptions from data dictionary")
+    else:
+        print(f"[INFO] No data dictionary found - parquet files will not have variable descriptions")
+        print(f"       Run 02_download_dictionary.py and 03_parse_dictionary.py to add descriptions")
+
     print(f"\n{'='*60}")
     print(f"FFIEC BULK FILE PARSER")
     print(f"{'='*60}")
@@ -440,8 +508,8 @@ def main():
             reporting_period = pd.Timestamp(year=year, month=quarter*3, day=1)
             df = convert_to_standard_format(df, reporting_period)
 
-            # Save as parquet
-            df.to_parquet(output_path, index=False, compression='snappy')
+            # Save as parquet with metadata
+            write_parquet_with_metadata(df, output_path, descriptions)
 
             print(f"[{quarter_str}] Saved: {len(df)} banks, {len(df.columns)-2} MDRM codes")
             print(f"[{quarter_str}] Output: {output_path.name}\n")

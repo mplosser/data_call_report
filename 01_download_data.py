@@ -1,9 +1,11 @@
 """
+01_download_data.py
+
 Download Call Report data from the Chicago Federal Reserve Bank.
 
 This script downloads quarterly Call Report data in SAS XPORT format from the
 Chicago Fed. The downloaded ZIP files contain SAS XPORT (.xpt) files which are
-automatically extracted by parse_chicago.py.
+automatically extracted by 04_parse_chicago.py.
 
 Data sources:
 - Historical Call Reports (1976-2010): All entity types
@@ -25,21 +27,21 @@ Entity types:
 
 Usage:
     # Download historical data (1985-2010) - all entity types
-    python download.py --start-year 1985 --end-year 2010 --output-dir data/raw/chicago
+    python 01_download_data.py --start-year 1985 --end-year 2010
 
     # Download structure data (2011-2021) - FFIEC 002 & FR 2886b only
-    python download.py --start-year 2011 --end-year 2021 --output-dir data/raw/chicago
+    python 01_download_data.py --start-year 2011 --end-year 2021
 
     # Download both ranges for complete coverage
-    python download.py --start-year 1985 --end-year 2021 --output-dir data/raw/chicago
+    python 01_download_data.py --start-year 1985 --end-year 2021
 
 Output:
-    ZIP files saved to: {output-dir}/call{YY}{MM}.zip
+    ZIP files saved to: data/raw/chicago/call{YY}{MM}.zip
     Example: call8503.zip (1985 Q1), call1012.zip (2010 Q4), call2106.zip (2021 Q2)
 
 Next step:
-    Run parse_chicago.py to extract ZIPs and convert to parquet (separates by entity type):
-    python parse_chicago.py --input-dir data/raw/chicago --output-dir data/processed
+    python 02_download_dictionary.py  # Download MDRM data dictionary
+    python 04_parse_chicago.py        # Extract and convert to parquet
 """
 
 import requests

@@ -1,5 +1,5 @@
 """
-cleanup.py
+07_cleanup.py
 
 Utility script to clean up downloaded and extracted Call Report data files.
 
@@ -11,22 +11,22 @@ This script provides options to delete:
 
 Usage:
     # Delete only extracted .xpt files (keeps ZIPs)
-    python cleanup.py --extracted
+    python 07_cleanup.py --extracted
 
     # Delete all raw data (ZIPs + extracted)
-    python cleanup.py --raw
+    python 07_cleanup.py --raw
 
     # Delete processed parquet files
-    python cleanup.py --processed
+    python 07_cleanup.py --processed
 
     # Delete everything (raw + processed)
-    python cleanup.py --all
+    python 07_cleanup.py --all
 
     # Dry run to see what would be deleted
-    python cleanup.py --extracted --dry-run
+    python 07_cleanup.py --extracted --dry-run
 
     # Specify custom directories
-    python cleanup.py --extracted --raw-dir data/raw/chicago
+    python 07_cleanup.py --extracted --raw-dir data/raw/chicago
 """
 
 import argparse
