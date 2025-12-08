@@ -47,28 +47,31 @@ warnings.filterwarnings('ignore')
 
 # Global dictionary cache (loaded once, used for all files)
 VARIABLE_DESCRIPTIONS = {}
+VARIABLE_FORMS = {}
 
 
-def load_data_dictionary(dict_path: Path = None) -> dict:
-    """Load variable descriptions from data dictionary."""
-    global VARIABLE_DESCRIPTIONS
+def load_data_dictionary(dict_path: Path = None) -> tuple[dict, dict]:
+    """Load variable descriptions and form mappings from data dictionary."""
+    global VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
 
     if VARIABLE_DESCRIPTIONS:
-        return VARIABLE_DESCRIPTIONS
+        return VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
 
     if dict_path is None:
         dict_path = Path('data/dictionary/data_dictionary.parquet')
 
     if not dict_path.exists():
-        return {}
+        return {}, {}
 
     try:
         df = pd.read_parquet(dict_path)
         VARIABLE_DESCRIPTIONS = dict(zip(df['Variable'], df['Description']))
-        return VARIABLE_DESCRIPTIONS
+        if 'ReportingForms' in df.columns:
+            VARIABLE_FORMS = dict(zip(df['Variable'], df['ReportingForms']))
+        return VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
     except Exception as e:
         print(f"[WARN] Could not load data dictionary: {e}")
-        return {}
+        return {}, {}
 
 
 def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, descriptions: dict):
@@ -104,19 +107,60 @@ ENTITY_TYPES = {
     'FFIEC_031_041': {
         'name': 'Commercial Banks (FFIEC 031/041)',
         'rssd9331_values': [1],
-        'description': 'Commercial banks filing FFIEC 031/041 call reports'
+        'description': 'Commercial banks filing FFIEC 031/041 call reports',
+        'mdrm_forms': ['FFIEC 031', 'FFIEC 041', 'FFIEC 032', 'FFIEC 033', 'FFIEC 034', 'FFIEC 051']
     },
     'FFIEC_002': {
         'name': 'Foreign Bank Branches (FFIEC 002)',
         'rssd9331_values': [10, 11],
-        'description': 'U.S. branches and agencies of foreign banks'
+        'description': 'U.S. branches and agencies of foreign banks',
+        'mdrm_forms': ['FFIEC 002', 'FFIEC 002s']
     },
     'FRB_2886b': {
         'name': 'Edge/Agreement Corporations (FR 2886b)',
         'rssd9331_values': [13, 17],
-        'description': 'Edge and Agreement corporations'
+        'description': 'Edge and Agreement corporations',
+        'mdrm_forms': ['FR 2886b', 'FR 2886a']
     }
 }
+
+# Columns to always keep regardless of MDRM mapping
+METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'RSSD9331', 'IDRSSD'}
+
+
+def filter_columns_for_entity(df: pd.DataFrame, entity_type: str, form_mapping: dict) -> pd.DataFrame:
+    """
+    Drop columns that are NOT on the reporting form AND are all null.
+    Keep columns if they're on the form OR have any data.
+    """
+    config = ENTITY_TYPES[entity_type]
+    allowed_forms = set(config['mdrm_forms'])
+
+    cols_to_keep = []
+    for col in df.columns:
+        col_upper = col.upper()
+
+        # Always keep metadata columns
+        if col_upper in METADATA_COLUMNS:
+            cols_to_keep.append(col)
+            continue
+
+        # Check if column is on the reporting form
+        on_form = False
+        if form_mapping:
+            forms_str = form_mapping.get(col_upper, '')
+            if forms_str:
+                col_forms = set(forms_str.split(','))
+                on_form = bool(col_forms & allowed_forms)
+
+        # Check if column has any data
+        has_data = df[col].notna().any()
+
+        # Keep if on form OR has data
+        if on_form or has_data:
+            cols_to_keep.append(col)
+
+    return df[cols_to_keep]
 
 
 def infer_reporting_period_from_filename(filename):
@@ -167,10 +211,10 @@ def extract_xpt_from_zip(zip_path):
         return extract_path
 
 
-def process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=False):
+def process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=False):
     """
     Read XPT file, split by entity type, and write parquet files immediately.
-    Returns: Dict[entity_type, record_count] - returns 'skipped' for skipped files
+    Returns: Dict[entity_type, (record_count, col_count)] - returns 'skipped' for skipped files
     """
     quarter_str = f"{reporting_period.year}Q{reporting_period.quarter}"
 
@@ -242,6 +286,9 @@ def process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=
             entity_df = df[df['RSSD9331'].isin(config['rssd9331_values'])].copy()
 
             if len(entity_df) > 0:
+                # Filter columns: only keep those designated for this form type AND non-null
+                entity_df = filter_columns_for_entity(entity_df, entity_type, form_mapping)
+
                 # Move metadata columns to front
                 cols = entity_df.columns.tolist()
                 metadata_cols = ['REPORTING_PERIOD', 'RSSD_ID']
@@ -254,7 +301,7 @@ def process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=
                 output_path = entity_output_dir / f"{quarter_str}.parquet"
                 write_parquet_with_metadata(entity_df, output_path, descriptions)
 
-                results[entity_type] = len(entity_df)
+                results[entity_type] = (len(entity_df), len(entity_df.columns))
 
         return results
 
@@ -330,10 +377,14 @@ def main():
         print(f"[ERROR] No files found in date range")
         return
 
-    # Load data dictionary for variable descriptions
-    descriptions = load_data_dictionary()
+    # Load data dictionary for variable descriptions and form mappings
+    descriptions, form_mapping = load_data_dictionary()
     if descriptions:
         print(f"[INFO] Loaded {len(descriptions):,} variable descriptions from data dictionary")
+        if form_mapping:
+            print(f"[INFO] Loaded form mappings for column filtering")
+        else:
+            print(f"[INFO] No form mappings found - columns will only be filtered by null values")
     else:
         print(f"[INFO] No data dictionary found - parquet files will not have variable descriptions")
         print(f"       Run 02_download_dictionary.py and 03_parse_dictionary.py to add descriptions")
@@ -348,18 +399,19 @@ def main():
     print(f"{'='*80}\n")
 
     # Process files - single pass: read, split, write immediately
-    stats = defaultdict(lambda: {'processed': 0, 'total_records': 0, 'skipped': 0})
+    stats = defaultdict(lambda: {'processed': 0, 'total_records': 0, 'total_cols': 0, 'skipped': 0})
 
     for xpt_file, reporting_period in tqdm(filtered_files, desc="Processing quarters"):
-        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions, force=args.force)
+        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=args.force)
 
         if results == 'skipped':
             for entity_type in ENTITY_TYPES:
                 stats[entity_type]['skipped'] += 1
         else:
-            for entity_type, record_count in results.items():
+            for entity_type, (record_count, col_count) in results.items():
                 stats[entity_type]['processed'] += 1
                 stats[entity_type]['total_records'] += record_count
+                stats[entity_type]['total_cols'] += col_count
 
     # Print summary
     print(f"\n{'='*80}")
@@ -374,6 +426,9 @@ def main():
             if stats[entity_type]['skipped'] > 0:
                 print(f"  Skipped (already exist): {stats[entity_type]['skipped']} quarters")
             print(f"  Total records: {stats[entity_type]['total_records']:,}")
+            if stats[entity_type]['processed'] > 0:
+                avg_cols = stats[entity_type]['total_cols'] // stats[entity_type]['processed']
+                print(f"  Avg columns per file: {avg_cols:,}")
 
     print(f"\n{'='*80}\n")
 

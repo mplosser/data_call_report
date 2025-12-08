@@ -35,28 +35,69 @@ import multiprocessing
 
 # Global dictionary cache (loaded once, used for all files)
 VARIABLE_DESCRIPTIONS = {}
+VARIABLE_FORMS = {}
+
+# MDRM forms for FFIEC 031/041 commercial banks
+FFIEC_031_041_FORMS = {'FFIEC 031', 'FFIEC 041', 'FFIEC 032', 'FFIEC 033', 'FFIEC 034', 'FFIEC 051'}
+
+# Columns to always keep regardless of MDRM mapping
+METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'IDRSSD'}
 
 
-def load_data_dictionary(dict_path: Path = None) -> dict:
-    """Load variable descriptions from data dictionary."""
-    global VARIABLE_DESCRIPTIONS
+def load_data_dictionary(dict_path: Path = None) -> tuple[dict, dict]:
+    """Load variable descriptions and form mappings from data dictionary."""
+    global VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
 
     if VARIABLE_DESCRIPTIONS:
-        return VARIABLE_DESCRIPTIONS
+        return VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
 
     if dict_path is None:
         dict_path = Path('data/dictionary/data_dictionary.parquet')
 
     if not dict_path.exists():
-        return {}
+        return {}, {}
 
     try:
         df = pd.read_parquet(dict_path)
         VARIABLE_DESCRIPTIONS = dict(zip(df['Variable'], df['Description']))
-        return VARIABLE_DESCRIPTIONS
+        if 'ReportingForms' in df.columns:
+            VARIABLE_FORMS = dict(zip(df['Variable'], df['ReportingForms']))
+        return VARIABLE_DESCRIPTIONS, VARIABLE_FORMS
     except Exception as e:
         print(f"[WARN] Could not load data dictionary: {e}")
-        return {}
+        return {}, {}
+
+
+def filter_columns(df: pd.DataFrame, form_mapping: dict) -> pd.DataFrame:
+    """
+    Drop columns that are NOT on the reporting form AND are all null.
+    Keep columns if they're on the form OR have any data.
+    """
+    cols_to_keep = []
+    for col in df.columns:
+        col_upper = col.upper()
+
+        # Always keep metadata columns
+        if col_upper in METADATA_COLUMNS:
+            cols_to_keep.append(col)
+            continue
+
+        # Check if column is on the reporting form
+        on_form = False
+        if form_mapping:
+            forms_str = form_mapping.get(col_upper, '')
+            if forms_str:
+                col_forms = set(forms_str.split(','))
+                on_form = bool(col_forms & FFIEC_031_041_FORMS)
+
+        # Check if column has any data
+        has_data = df[col].notna().any()
+
+        # Keep if on form OR has data
+        if on_form or has_data:
+            cols_to_keep.append(col)
+
+    return df[cols_to_keep]
 
 
 def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, descriptions: dict):
@@ -467,10 +508,14 @@ def main():
         print("No files found to process")
         return
 
-    # Load data dictionary for variable descriptions
-    descriptions = load_data_dictionary()
+    # Load data dictionary for variable descriptions and form mappings
+    descriptions, form_mapping = load_data_dictionary()
     if descriptions:
         print(f"[INFO] Loaded {len(descriptions):,} variable descriptions from data dictionary")
+        if form_mapping:
+            print(f"[INFO] Loaded form mappings for column filtering")
+        else:
+            print(f"[INFO] No form mappings found - columns will only be filtered by null values")
     else:
         print(f"[INFO] No data dictionary found - parquet files will not have variable descriptions")
         print(f"       Run 02_download_dictionary.py and 03_parse_dictionary.py to add descriptions")
@@ -517,10 +562,15 @@ def main():
             reporting_period = pd.Timestamp(year=year, month=quarter*3, day=1)
             df = convert_to_standard_format(df, reporting_period)
 
+            # Filter columns: only keep those designated for FFIEC 031/041 AND non-null
+            original_cols = len(df.columns)
+            df = filter_columns(df, form_mapping)
+            filtered_cols = len(df.columns)
+
             # Save as parquet with metadata
             write_parquet_with_metadata(df, output_path, descriptions)
 
-            print(f"[{quarter_str}] Saved: {len(df)} banks, {len(df.columns)-2} MDRM codes")
+            print(f"[{quarter_str}] Saved: {len(df)} banks, {filtered_cols-2} columns (filtered from {original_cols-2})")
             print(f"[{quarter_str}] Output: {output_path.name}\n")
 
             processed_count += 1

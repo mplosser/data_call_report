@@ -21,6 +21,7 @@ Usage:
 Output:
     - data_dictionary.csv: Human-readable CSV with variable descriptions
     - data_dictionary.parquet: Fast-loading parquet for use by parse scripts
+      (includes ReportingForms column for filtering by entity type)
 
 Next step: Run 04_parse_chicago.py or 05_parse_ffiec.py to parse data with metadata.
 """
@@ -85,11 +86,12 @@ def parse_dictionary(input_path: Path, output_dir: Path) -> tuple[Path, Path]:
     print(f"  Columns: {list(df.columns)}")
 
     # Identify the columns
-    # MDRM has: Mnemonic (prefix), Item Code (number), Item Name (description), Start/End Date
+    # MDRM has: Mnemonic (prefix), Item Code (number), Item Name (description), Start/End Date, Reporting Form
     mnemonic_col = None
     item_code_col = None
     desc_col = None
     end_date_col = None
+    form_col = None
 
     for col in df.columns:
         col_lower = col.lower()
@@ -101,6 +103,8 @@ def parse_dictionary(input_path: Path, output_dir: Path) -> tuple[Path, Path]:
             desc_col = col
         elif 'end' in col_lower and 'date' in col_lower:
             end_date_col = col
+        elif 'reporting' in col_lower and 'form' in col_lower:
+            form_col = col
 
     if not mnemonic_col:
         for candidate in ['Mnemonic', 'Variable', 'MDRM', 'Code']:
@@ -127,6 +131,7 @@ def parse_dictionary(input_path: Path, output_dir: Path) -> tuple[Path, Path]:
     print(f"  Item Code column: {item_code_col}")
     print(f"  Description column: {desc_col}")
     print(f"  End date column: {end_date_col}")
+    print(f"  Reporting Form column: {form_col}")
 
     # Filter to Call Report prefixes (Mnemonic contains prefix like RCON, RCFD, etc.)
     mask = df[mnemonic_col].astype(str).isin(CALL_REPORT_PREFIXES)
@@ -142,6 +147,16 @@ def parse_dictionary(input_path: Path, output_dir: Path) -> tuple[Path, Path]:
         )
     else:
         df_filtered['_full_variable'] = df_filtered[mnemonic_col].astype(str)
+
+    df_filtered['_full_variable'] = df_filtered['_full_variable'].str.upper()
+
+    # Aggregate all reporting forms for each variable (before deduplication)
+    form_mapping = {}
+    if form_col:
+        form_groups = df_filtered.groupby('_full_variable')[form_col].apply(
+            lambda x: ','.join(sorted(set(x.dropna().astype(str))))
+        )
+        form_mapping = form_groups.to_dict()
 
     # Parse end date if available
     if end_date_col:
@@ -160,14 +175,18 @@ def parse_dictionary(input_path: Path, output_dir: Path) -> tuple[Path, Path]:
 
     # Create output dataframe using full variable name
     output_df = pd.DataFrame({
-        'Variable': df_filtered['_full_variable'].str.upper(),
-        'Description': df_filtered['Description']
+        'Variable': df_filtered['_full_variable'],
+        'Description': df_filtered['Description'],
+        'ReportingForms': df_filtered['_full_variable'].map(form_mapping).fillna('')
     })
 
     # Remove empty descriptions
     output_df = output_df[output_df['Description'].str.len() > 0]
 
     print(f"  Variables with descriptions: {len(output_df):,}")
+    if form_col:
+        has_forms = (output_df['ReportingForms'].str.len() > 0).sum()
+        print(f"  Variables with form mapping: {has_forms:,}")
 
     # Sort by variable name
     output_df = output_df.sort_values('Variable').reset_index(drop=True)
