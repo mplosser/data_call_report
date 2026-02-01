@@ -127,6 +127,86 @@ ENTITY_TYPES = {
 # Columns to always keep regardless of MDRM mapping
 METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'RSSD9331', 'IDRSSD'}
 
+# Prefix pairs to synchronize (populate missing with available)
+# RCFD = consolidated (foreign + domestic), RCON = domestic only
+SYNC_PREFIX_PAIRS = [('RCFD', 'RCON')]
+
+
+def synchronize_prefix_pairs(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """
+    Synchronize RCFD/RCON column pairs so both contain data where available.
+
+    Chicago Fed data typically already has both columns populated, but this
+    ensures consistency with the FFIEC parsing approach.
+
+    For each RCFD/RCON pair:
+    - If RCFD has value but RCON is empty: copy RCFD to RCON
+    - If RCON has value but RCFD is empty: copy RCON to RCFD
+    """
+    import re
+
+    # Find all columns matching each prefix
+    prefix_cols = {}
+    for col in df.columns:
+        for prefix1, prefix2 in SYNC_PREFIX_PAIRS:
+            match1 = re.match(f'^({prefix1})(\\d+)$', col)
+            match2 = re.match(f'^({prefix2})(\\d+)$', col)
+            if match1:
+                code = match1.group(2)
+                prefix_cols.setdefault(code, {})[prefix1] = col
+            elif match2:
+                code = match2.group(2)
+                prefix_cols.setdefault(code, {})[prefix2] = col
+
+    # Collect new columns to add (avoids fragmentation warning)
+    new_columns = {}
+    sync_count = 0
+
+    for code, prefixes in prefix_cols.items():
+        for prefix1, prefix2 in SYNC_PREFIX_PAIRS:
+            col1 = prefixes.get(prefix1)
+            col2 = prefixes.get(prefix2)
+
+            if col1 and col2:
+                # Both columns exist - fill missing values from each other
+                # Only sync numeric columns (skip mixed type columns like codes with letters)
+                is_numeric1 = pd.api.types.is_numeric_dtype(df[col1])
+                is_numeric2 = pd.api.types.is_numeric_dtype(df[col2])
+
+                if not is_numeric1 or not is_numeric2:
+                    # Skip non-numeric columns (likely contain codes like '2a')
+                    continue
+
+                mask1_missing = df[col1].isna() & df[col2].notna()
+                mask2_missing = df[col2].isna() & df[col1].notna()
+
+                if mask1_missing.any():
+                    df.loc[mask1_missing, col1] = df.loc[mask1_missing, col2]
+                    sync_count += mask1_missing.sum()
+                if mask2_missing.any():
+                    df.loc[mask2_missing, col2] = df.loc[mask2_missing, col1]
+                    sync_count += mask2_missing.sum()
+
+            elif col1 and not col2:
+                # Only prefix1 exists - create prefix2 column (only for numeric columns)
+                if pd.api.types.is_numeric_dtype(df[col1]):
+                    new_col = f'{prefix2}{code}'
+                    new_columns[new_col] = df[col1].copy()
+                    sync_count += df[col1].notna().sum()
+
+            elif col2 and not col1:
+                # Only prefix2 exists - create prefix1 column (only for numeric columns)
+                if pd.api.types.is_numeric_dtype(df[col2]):
+                    new_col = f'{prefix1}{code}'
+                    new_columns[new_col] = df[col2].copy()
+                    sync_count += df[col2].notna().sum()
+
+    # Add all new columns at once (avoids fragmentation)
+    if new_columns:
+        df = pd.concat([df, pd.DataFrame(new_columns, index=df.index)], axis=1)
+
+    return df, sync_count
+
 
 def filter_columns_for_entity(df: pd.DataFrame, entity_type: str, form_mapping: dict) -> pd.DataFrame:
     """
@@ -286,6 +366,9 @@ def process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_m
             entity_df = df[df['RSSD9331'].isin(config['rssd9331_values'])].copy()
 
             if len(entity_df) > 0:
+                # Synchronize RCFD/RCON pairs (ensure both populated where data exists)
+                entity_df, _ = synchronize_prefix_pairs(entity_df)
+
                 # Filter columns: only keep those designated for this form type AND non-null
                 entity_df = filter_columns_for_entity(entity_df, entity_type, form_mapping)
 

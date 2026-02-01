@@ -43,6 +43,87 @@ FFIEC_031_041_FORMS = {'FFIEC 031', 'FFIEC 041', 'FFIEC 032', 'FFIEC 033', 'FFIE
 # Columns to always keep regardless of MDRM mapping
 METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'IDRSSD'}
 
+# Prefix pairs to synchronize (populate missing with available)
+# RCFD = consolidated (foreign + domestic), RCON = domestic only
+SYNC_PREFIX_PAIRS = [('RCFD', 'RCON')]
+
+
+def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Synchronize RCFD/RCON column pairs so both contain data where available.
+
+    FFIEC CDR data reports RCFD (consolidated) and RCON (domestic) as mutually
+    exclusive, while Chicago Fed data duplicates values into both. This function
+    makes FFIEC data consistent with Chicago Fed by copying values between pairs.
+
+    For each RCFD/RCON pair:
+    - If RCFD has value but RCON is empty: copy RCFD to RCON
+    - If RCON has value but RCFD is empty: copy RCON to RCFD
+    """
+    import re
+
+    # Find all columns matching each prefix
+    prefix_cols = {}
+    for col in df.columns:
+        for prefix1, prefix2 in SYNC_PREFIX_PAIRS:
+            match1 = re.match(f'^({prefix1})(\\d+)$', col)
+            match2 = re.match(f'^({prefix2})(\\d+)$', col)
+            if match1:
+                code = match1.group(2)
+                prefix_cols.setdefault(code, {})[prefix1] = col
+            elif match2:
+                code = match2.group(2)
+                prefix_cols.setdefault(code, {})[prefix2] = col
+
+    # Collect new columns to add (avoids fragmentation warning)
+    new_columns = {}
+    sync_count = 0
+
+    for code, prefixes in prefix_cols.items():
+        for prefix1, prefix2 in SYNC_PREFIX_PAIRS:
+            col1 = prefixes.get(prefix1)
+            col2 = prefixes.get(prefix2)
+
+            if col1 and col2:
+                # Both columns exist - fill missing values from each other
+                # Only sync numeric columns (skip mixed type columns like codes with letters)
+                is_numeric1 = pd.api.types.is_numeric_dtype(df[col1])
+                is_numeric2 = pd.api.types.is_numeric_dtype(df[col2])
+
+                if not is_numeric1 or not is_numeric2:
+                    # Skip non-numeric columns (likely contain codes like '2a')
+                    continue
+
+                mask1_missing = df[col1].isna() & df[col2].notna()
+                mask2_missing = df[col2].isna() & df[col1].notna()
+
+                if mask1_missing.any():
+                    df.loc[mask1_missing, col1] = df.loc[mask1_missing, col2]
+                    sync_count += mask1_missing.sum()
+                if mask2_missing.any():
+                    df.loc[mask2_missing, col2] = df.loc[mask2_missing, col1]
+                    sync_count += mask2_missing.sum()
+
+            elif col1 and not col2:
+                # Only prefix1 exists - create prefix2 column (only for numeric columns)
+                if pd.api.types.is_numeric_dtype(df[col1]):
+                    new_col = f'{prefix2}{code}'
+                    new_columns[new_col] = df[col1].copy()
+                    sync_count += df[col1].notna().sum()
+
+            elif col2 and not col1:
+                # Only prefix2 exists - create prefix1 column (only for numeric columns)
+                if pd.api.types.is_numeric_dtype(df[col2]):
+                    new_col = f'{prefix1}{code}'
+                    new_columns[new_col] = df[col2].copy()
+                    sync_count += df[col2].notna().sum()
+
+    # Add all new columns at once (avoids fragmentation)
+    if new_columns:
+        df = pd.concat([df, pd.DataFrame(new_columns, index=df.index)], axis=1)
+
+    return df, sync_count
+
 
 def load_data_dictionary(dict_path: Path = None) -> tuple[dict, dict]:
     """Load variable descriptions and form mappings from data dictionary."""
@@ -358,8 +439,11 @@ def parse_text_content(content, source_name):
             if col == 'RSSD_ID':
                 continue
 
-            # Try to convert to numeric
-            df[col] = pd.to_numeric(df[col], errors='ignore')
+            # Try to convert to numeric (coerce non-numeric to NaN)
+            numeric_col = pd.to_numeric(df[col], errors='coerce')
+            # Only use numeric version if at least some values converted
+            if numeric_col.notna().any():
+                df[col] = numeric_col
 
         print(f"    Parsed {len(df)} banks")
 
@@ -561,6 +645,9 @@ def main():
             # Convert to standard format
             reporting_period = pd.Timestamp(year=year, month=quarter*3, day=1)
             df = convert_to_standard_format(df, reporting_period)
+
+            # Synchronize RCFD/RCON pairs (make consistent with Chicago Fed data)
+            df, sync_count = synchronize_prefix_pairs(df)
 
             # Filter columns: only keep those designated for FFIEC 031/041 AND non-null
             original_cols = len(df.columns)

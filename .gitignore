@@ -26,6 +26,10 @@ data/dictionary/
 *.xlsx
 *.xls
 
+# Windows reserved device names (can't be deleted)
+nul
+NUL
+
 # Python cache
 __pycache__/
 *.py[cod]
