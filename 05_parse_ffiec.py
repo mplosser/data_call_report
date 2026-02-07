@@ -520,7 +520,9 @@ def process_file_wrapper(args_tuple):
             return ('error', quarter_str, "No data parsed")
 
         # Convert to standard format
-        reporting_period = pd.Timestamp(year=year, month=quarter*3, day=1)
+        # Use end-of-quarter dates (consistent with Chicago Fed)
+        eom_day = 31 if quarter in (1, 4) else 30
+        reporting_period = pd.Timestamp(year=year, month=quarter*3, day=eom_day)
         df = convert_to_standard_format(df, reporting_period)
 
         # Save as parquet
@@ -643,7 +645,9 @@ def main():
                 continue
 
             # Convert to standard format
-            reporting_period = pd.Timestamp(year=year, month=quarter*3, day=1)
+            # Use end-of-quarter dates (consistent with Chicago Fed)
+            eom_day = 31 if quarter in (1, 4) else 30
+            reporting_period = pd.Timestamp(year=year, month=quarter*3, day=eom_day)
             df = convert_to_standard_format(df, reporting_period)
 
             # Synchronize RCFD/RCON pairs (make consistent with Chicago Fed data)
