@@ -103,23 +103,37 @@ def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, description
     pq.write_table(new_table, output_path, compression='snappy')
 
 # Entity type mappings
+# RSSD9331 taxonomy (verified empirically against raw CALL*.xpt names + NIC attributes,
+# and against the STATA reference panel's entity set — see bec_migration investigation
+# 2026-07-29). Codes are DOMESTIC vs FOREIGN, NOT the earlier assumed pairing:
+#   1  = domestic commercial bank          -> FFIEC_031_041
+#   10 = domestic savings bank             -> FFIEC_031_041  (e.g. "ORITANI SAVINGS BANK", M&T)
+#   17 = domestic co-operative bank        -> FFIEC_031_041  (e.g. "WARE CO-OPERATIVE BANK")
+#   9  = branch of a foreign bank          -> FFIEC_002      ("NEW YORK BRANCH")
+#   11 = agency of a foreign bank          -> FFIEC_002      ("LOS ANGELES AGENCY")
+#   13 = foreign agency                    -> FRB_2886b      ("MIAMI AGENCY")
+#   21 = Edge Act international corp        -> FRB_2886b      ("CITIBANK INTERNATIONAL")
+# The prior mapping put domestic codes 10 & 17 into the foreign/edge buckets, dropping
+# ~500 domestic banks/quarter (incl. major banks + hundreds of savings/co-op banks) from
+# the commercial-bank output for all pre-2011 (Chicago-Fed-sourced) quarters. STATA's
+# reference panel draws exactly from {1, 10, 17}, confirming this routing.
 ENTITY_TYPES = {
     'FFIEC_031_041': {
-        'name': 'Commercial Banks (FFIEC 031/041)',
-        'rssd9331_values': [1],
-        'description': 'Commercial banks filing FFIEC 031/041 call reports',
+        'name': 'Commercial + Savings Banks (FFIEC 031/041)',
+        'rssd9331_values': [1, 10, 17],
+        'description': 'Domestic commercial, savings, and co-operative banks filing FFIEC 031/041/034 call reports',
         'mdrm_forms': ['FFIEC 031', 'FFIEC 041', 'FFIEC 032', 'FFIEC 033', 'FFIEC 034', 'FFIEC 051']
     },
     'FFIEC_002': {
-        'name': 'Foreign Bank Branches (FFIEC 002)',
-        'rssd9331_values': [10, 11],
+        'name': 'Foreign Bank Branches/Agencies (FFIEC 002)',
+        'rssd9331_values': [9, 11],
         'description': 'U.S. branches and agencies of foreign banks',
         'mdrm_forms': ['FFIEC 002', 'FFIEC 002s']
     },
     'FRB_2886b': {
         'name': 'Edge/Agreement Corporations (FR 2886b)',
-        'rssd9331_values': [13, 17],
-        'description': 'Edge and Agreement corporations',
+        'rssd9331_values': [13, 21],
+        'description': 'Edge and Agreement corporations / foreign agencies',
         'mdrm_forms': ['FR 2886b', 'FR 2886a']
     }
 }
