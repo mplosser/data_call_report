@@ -47,6 +47,27 @@ METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'IDRSSD'}
 # RCFD = consolidated (foreign + domestic), RCON = domestic only
 SYNC_PREFIX_PAIRS = [('RCFD', 'RCON')]
 
+# Columns that must stay text even when every value happens to parse as a number.
+# These are identifiers and codes, not quantities: coercing them drops leading zeros
+# (a ZIP of 07095 becomes 7095, an ABA routing number of 011000015 becomes 11000015)
+# and turns codes into meaningless integers. The all-values-must-convert rule below
+# already protects them in most quarters, but only by accident -- it depends on at
+# least one value in that quarter being non-numeric.
+ALWAYS_TEXT_COLUMNS = {
+    'FINANCIAL INSTITUTION NAME',
+    'FINANCIAL INSTITUTION ADDRESS',
+    'FINANCIAL INSTITUTION CITY',
+    'FINANCIAL INSTITUTION STATE',
+    'FINANCIAL INSTITUTION ZIP CODE',
+    'PRIMARY ABA ROUTING NUMBER',
+    'RSSD9017',  # legal name
+    'RSSD9130',  # city
+    'RSSD9200',  # state code
+    'RSSD9220',  # ZIP code
+    'RCON6724', 'RCFD6724',  # capital election code ('1a', '1b', '2a')
+    'RCON8678', 'RCFD8678',  # fiscal year end ('1231', '04/30')
+}
+
 
 def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -434,15 +455,36 @@ def parse_text_content(content, source_name):
         df = df.dropna(subset=['RSSD_ID'])
         df['RSSD_ID'] = df['RSSD_ID'].astype(int)
 
-        # Convert numeric columns
+        # Convert numeric columns.
+        #
+        # A column becomes numeric only if EVERY populated value converts. The rule this
+        # replaces was `if numeric_col.notna().any()`, which converted a column when even
+        # a single value looked numeric -- and the coercion then nulled every genuine
+        # string in it. Measured on 2024Q4, that silently destroyed 42 text columns:
+        #   Financial Institution State  4,542 state codes lost to 1 bank reporting '0'
+        #   RSSD9017 (institution name)  4,541 names lost to 2 numeric-looking names
+        #   RSSD9220 (ZIP)               9 ZIP+4 values such as '07095-1191'
+        #   TEXT4461/4462/3549/...       bank-supplied labels for "other" line items
+        #   TE01N528-TE10N528            bank website URLs
+        #
+        # Checked across five quarters spanning 2011Q1-2025Q3: no genuine numeric data
+        # column is ever partially numeric, so this rule never demotes real data. The
+        # only MDRM-pattern columns it keeps as text are genuinely textual ones, and
+        # those are pinned explicitly in ALWAYS_TEXT_COLUMNS.
         for col in df.columns:
             if col == 'RSSD_ID':
                 continue
 
-            # Try to convert to numeric (coerce non-numeric to NaN)
+            if str(col).upper() in ALWAYS_TEXT_COLUMNS:
+                continue
+
+            populated = df[col].notna() & (df[col].astype(str).str.strip() != '')
+            n_populated = int(populated.sum())
+            if n_populated == 0:
+                continue
+
             numeric_col = pd.to_numeric(df[col], errors='coerce')
-            # Only use numeric version if at least some values converted
-            if numeric_col.notna().any():
+            if int(numeric_col[populated].notna().sum()) == n_populated:
                 df[col] = numeric_col
 
         print(f"    Parsed {len(df)} banks")
