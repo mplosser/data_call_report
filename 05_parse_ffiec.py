@@ -46,6 +46,7 @@ METADATA_COLUMNS = {'REPORTING_PERIOD', 'RSSD_ID', 'RSSD9001', 'IDRSSD'}
 # Prefix pairs to synchronize (populate missing with available)
 # RCFD = consolidated (foreign + domestic), RCON = domestic only
 SYNC_PREFIX_PAIRS = [('RCFD', 'RCON')]
+FILING_TYPE_COLUMN = 'FINANCIAL INSTITUTION FILING TYPE'   # 31 / 41 / 51
 
 # Columns that must stay text even when every value happens to parse as a number.
 # These are identifiers and codes, not quantities: coercing them drops leading zeros
@@ -85,6 +86,13 @@ def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
     For each RCFD/RCON pair:
     - If RCFD has value but RCON is empty: copy RCFD to RCON
     - If RCON has value but RCFD is empty: copy RCON to RCFD
+
+    ONLY for banks without foreign offices (FFIEC 041 / 051 filers), where consolidated and
+    domestic are the same number by definition (2026-09-26). An FFIEC 031 filer has foreign
+    offices, so its consolidated (RCFD) and domestic (RCON) amounts differ; where it reports
+    only one of them the other is genuinely absent and stays blank. Filling it made, for
+    example, RCFD2200 (total deposits, consolidated) equal to RCON2200 (domestic) for every
+    031 filer from 2011, silently dropping their foreign-office deposits.
     """
     import re
 
@@ -105,6 +113,11 @@ def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
     new_columns = {}
     sync_count = 0
 
+    # Which rows may be cross-filled: every row that is not an FFIEC 031 (foreign-office)
+    # filer. Without a filing-type column (should not happen in CDR files) fill nothing.
+    ftype = pd.to_numeric(df.get(FILING_TYPE_COLUMN), errors="coerce") if FILING_TYPE_COLUMN in df.columns else None
+    no_foreign_offices = ftype.ne(31) & ftype.notna() if ftype is not None else pd.Series(False, index=df.index)
+
     for code, prefixes in prefix_cols.items():
         for prefix1, prefix2 in SYNC_PREFIX_PAIRS:
             col1 = prefixes.get(prefix1)
@@ -120,8 +133,8 @@ def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
                     # Skip non-numeric columns (likely contain codes like '2a')
                     continue
 
-                mask1_missing = df[col1].isna() & df[col2].notna()
-                mask2_missing = df[col2].isna() & df[col1].notna()
+                mask1_missing = df[col1].isna() & df[col2].notna() & no_foreign_offices
+                mask2_missing = df[col2].isna() & df[col1].notna() & no_foreign_offices
 
                 if mask1_missing.any():
                     df.loc[mask1_missing, col1] = df.loc[mask1_missing, col2]
@@ -134,15 +147,15 @@ def synchronize_prefix_pairs(df: pd.DataFrame) -> pd.DataFrame:
                 # Only prefix1 exists - create prefix2 column (only for numeric columns)
                 if pd.api.types.is_numeric_dtype(df[col1]):
                     new_col = f'{prefix2}{code}'
-                    new_columns[new_col] = df[col1].copy()
-                    sync_count += df[col1].notna().sum()
+                    new_columns[new_col] = df[col1].where(no_foreign_offices)
+                    sync_count += int((df[col1].notna() & no_foreign_offices).sum())
 
             elif col2 and not col1:
                 # Only prefix2 exists - create prefix1 column (only for numeric columns)
                 if pd.api.types.is_numeric_dtype(df[col2]):
                     new_col = f'{prefix1}{code}'
-                    new_columns[new_col] = df[col2].copy()
-                    sync_count += df[col2].notna().sum()
+                    new_columns[new_col] = df[col2].where(no_foreign_offices)
+                    sync_count += int((df[col2].notna() & no_foreign_offices).sum())
 
     # Add all new columns at once (avoids fragmentation)
     if new_columns:
