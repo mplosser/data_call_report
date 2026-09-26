@@ -11,8 +11,9 @@ Call Report Data Acquisition Pipeline for downloading and processing FFIEC banki
 ### Full Pipeline
 
 ```bash
-# 1. Download Chicago Fed data
+# 1. Download Chicago Fed data (through 2010Q4 for banks) and the FFIEC CDR bulk files (2011Q1-present)
 python 01_download_data.py --start-year 1985 --end-year 2021
+python 01b_download_ffiec_cdr.py            # drives the CDR bulk-download form; --check reports newest published vs on disk
 
 # 2. Download and parse data dictionary
 python 02_download_dictionary.py
@@ -153,3 +154,15 @@ data/dictionary/
 - Use standardized columns: `RSSD_ID`, `REPORTING_PERIOD`, uppercase MDRM codes
 - Include dictionary metadata via `write_parquet_with_metadata()`
 - Output to entity subdirectory with `{YEAR}Q{QUARTER}.parquet` naming
+
+### Typing rules in the FFIEC parser (2026-09-26)
+
+`05_parse_ffiec.py` converts a column to numeric only if every populated value parses
+(never destroys text). Two CDR conventions are handled explicitly: columns that are the
+literal `CONF` for every bank (confidential items; 325-327 a quarter from 2013Q4, mostly
+Schedule RC-O) are DROPPED, and columns whose every value is a percent string such as
+`9.1154%` (the reported capital ratios from 2015Q1) are stored as numbers in percent
+units. Units are NOT harmonized across eras here: the same ratio items are fractions in
+2011Q1-2014Q4 and switch between fractions and percent inside the Chicago Fed era
+(fractions to 2008Q3, percent 2008Q4-2010Q4). Consumers rescale (bankpanel does).
+Text columns are always written as Arrow `string`.

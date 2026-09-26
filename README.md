@@ -15,8 +15,10 @@ pip install -r requirements.txt
 ## Quick Start
 
 ```bash
-# 1. Download Chicago Fed data (1985-2021)
+# 1. Download Chicago Fed data (1985-2021) and the FFIEC CDR bulk files (2011Q1-present)
 python 01_download_data.py
+python 01b_download_ffiec_cdr.py            # every CDR quarter not yet on disk
+python 01b_download_ffiec_cdr.py --check    # newest published vs newest on disk, no download
 
 # 2. Download MDRM data dictionary
 python 02_download_dictionary.py
@@ -27,7 +29,7 @@ python 03_parse_dictionary.py
 # 4. Parse Chicago Fed data to parquet (with variable descriptions)
 python 04_parse_chicago.py
 
-# 5. Parse FFIEC bulk downloads (2011+, manual download required)
+# 5. Parse FFIEC CDR bulk downloads (2011Q1-present)
 python 05_parse_ffiec.py
 
 # 6. Summarize parsed data
@@ -42,6 +44,7 @@ python 07_cleanup.py --extracted
 | Script | Purpose |
 |--------|---------|
 | `01_download_data.py` | Download Chicago Fed ZIP files (1985-2021) |
+| `01b_download_ffiec_cdr.py` | Download FFIEC CDR "Call Reports -- Single Period" bulk ZIPs (2011Q1-present); `--check` reports newest published vs newest on disk |
 | `02_download_dictionary.py` | Download MDRM data dictionary from Federal Reserve |
 | `03_parse_dictionary.py` | Parse MDRM for Call Report variable descriptions |
 | `04_parse_chicago.py` | Extract Chicago Fed SAS XPORT files to parquet |
@@ -54,7 +57,7 @@ python 07_cleanup.py --extracted
 | Entity Type | Coverage | Data Source |
 |-------------|----------|-------------|
 | **FFIEC_031_041** (Commercial Banks) | 1985Q1-2010Q4 | Chicago Fed Historical |
-| | 2011Q1-2025Q3 | FFIEC CDR Bulk Downloads |
+| | 2011Q1-present (2026Q2 as of 2026-09) | FFIEC CDR Bulk Downloads (`01b_download_ffiec_cdr.py`) |
 | **FFIEC_002** (Foreign Branches) | 1985Q1-2021Q2 | Chicago Fed |
 | **FRB_2886b** (Edge/Agreement Corps) | 1985Q1-2021Q2 | Chicago Fed |
 
@@ -88,14 +91,15 @@ python 01_download_data.py --start-year 1985 --end-year 2021
 
 This downloads quarterly ZIP files containing SAS XPORT (.xpt) files.
 
-### FFIEC CDR bulk download, 2011Q1 onward (manual, parsed by `05_parse_ffiec.py`)
+### FFIEC CDR bulk download, 2011Q1 onward (`01b_download_ffiec_cdr.py`)
 
-For FFIEC_031_041 coverage 2011+, manually download from FFIEC:
-
-1. Visit: https://cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx
-2. Select "Call Reports -- Single Period"
-3. Choose quarter end date and "Tab Delimited" format
-4. Save to `data/raw/ffiec/`
+For FFIEC_031_041 coverage from 2011Q1 the source is the FFIEC CDR bulk download page,
+https://cdr.ffiec.gov/public/PWS/DownloadBulkData.aspx ("Call Reports -- Single Period",
+tab-delimited). The script drives that form (no credentials, no API key), downloads every
+quarter the site offers that is not yet in `data/raw/ffiec/`, and saves each ZIP under the
+site's own file name. `--check` only reports the newest quarter published against the
+newest on disk (exit code 1 when quarters are missing), which is a cheap thing to run
+before a rebuild. A manual download to `data/raw/ffiec/` still works if the form changes.
 
 ### MDRM data dictionary (`02_download_dictionary.py`, `03_parse_dictionary.py`)
 
@@ -146,6 +150,27 @@ data/processed/
 - **Rows**: One per filer (RSSD_ID)
 - **Columns**: `RSSD_ID`, `REPORTING_PERIOD`, MDRM codes (uppercase)
 - **Metadata**: Variable descriptions in column metadata
+
+**Typing rules (FFIEC CDR files, 2011Q1 onward):**
+- A column is stored as a number only if *every* populated value parses as one; otherwise
+  it stays text. Boolean items (`true`/`false`), the capital election code (`RCON6724`),
+  the fiscal year-end (`RCON8678`), the LEI (`RCON9224`), names, addresses and `TEXT*`
+  labels are therefore text.
+- **Confidential items are dropped.** The CDR files write the literal string `CONF` for
+  every bank in a confidential item (322 Schedule RC-O assessment items, two RC-P, two
+  RC-C and one RI-E; 325–327 columns a quarter from 2013Q4). No item is ever partially
+  confidential, so a column that is all `CONF` carries nothing and is not written. The
+  parser prints the dropped codes for each file.
+- **Percent strings become numbers in percent units.** The reported capital ratios
+  (`RCOA`/`RCFA` 7204, 7205, 7206, P793 and the other Basel III ratio lines; 21 columns
+  in 2025Q3) are written as `9.1154%` from 2015Q1. A column whose every populated value
+  is a percent string is stored as the number written, `9.1154`. Note the same items are
+  numeric *fractions* (`0.0948`) in the 2011Q1–2014Q4 CDR files and switch between
+  fractions and percent inside the Chicago Fed era (fractions to 2008Q3, percent
+  2008Q4–2010Q4). This repository stores what each file says; unit harmonization is the
+  consumer's job (see `bankpanel`).
+- Text columns are always written as Arrow `string`, so the schema is the same type for
+  every quarter.
 
 ## Cleanup Utility
 
