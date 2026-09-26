@@ -167,3 +167,10 @@ units. Units are NOT harmonized across eras here: the same ratio items are fract
 2011Q1-2014Q4 and switch between fractions and percent inside the Chicago Fed era
 (fractions to 2008Q3, percent 2008Q4-2010Q4). Consumers rescale (bankpanel does).
 Text columns are always written as Arrow `string`.
+
+### Downstream: bankpanel
+
+Panels are built from these parquet files by the sibling repository `bankpanel`
+(`bankpanel build`, and `tools/quarterly_refresh.py` for the full fetch-parse-rebuild-
+revalidate cycle). Changes to column names, typing or file layout here change its input:
+re-run its raw-identity check (`tools/raw_identity_check.py`) after a parser change.

@@ -6,6 +6,22 @@ Scripts for downloading and processing FFIEC 031/041, 002, and FRB 2886b data (1
 
 Downloads raw data, adds MDRM variable descriptions, separates by filer type, and saves in parquet format with column-level metadata.
 
+## Building panels: use bankpanel
+
+This repository stops at one parquet file per quarter, exactly as filed. To turn those
+files into a research panel -- consistent variable names across MDRM code changes,
+year-to-date income differenced into quarterly flows, form-aware coverage checks, the
+reported capital ratios in one unit -- use
+[`bankpanel`](https://github.com/mplosser/bankpanel), which reads
+`data/processed/FFIEC_031_041/` directly:
+
+```bash
+bankpanel build --raw-dir ../data_call_report/data/processed/FFIEC_031_041 --out panel_root
+```
+
+Its `tools/quarterly_refresh.py` runs this repository's download and parse steps and then
+rebuilds and revalidates the panel, so a new quarter is one command.
+
 ## Requirements
 
 ```bash

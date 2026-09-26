@@ -26,7 +26,7 @@ from tqdm import tqdm
 MDRM_URL = "https://www.federalreserve.gov/apps/mdrm/pdf/MDRM.zip"
 
 
-def download_mdrm(output_dir: Path) -> Path:
+def download_mdrm(output_dir: Path, force: bool = False) -> Path:
     """Download MDRM.zip and extract MDRM.csv."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -34,7 +34,7 @@ def download_mdrm(output_dir: Path) -> Path:
     csv_path = output_dir / "MDRM.csv"
 
     # Download if not exists or force refresh
-    if not zip_path.exists():
+    if force or not zip_path.exists():
         print(f"Downloading MDRM dictionary from {MDRM_URL}...")
         response = requests.get(MDRM_URL, stream=True)
         response.raise_for_status()
@@ -94,9 +94,11 @@ Next step: Run 03_parse_dictionary.py to filter and process the dictionary.
         help='Directory to save dictionary files (default: data/dictionary)'
     )
 
+    parser.add_argument('--force', action='store_true',
+                        help='Re-download MDRM.zip even if a copy exists (pick up codes added since)')
     args = parser.parse_args()
 
-    csv_path = download_mdrm(args.output_dir)
+    csv_path = download_mdrm(args.output_dir, force=args.force)
 
     print(f"\nMDRM dictionary downloaded successfully!")
     print(f"  CSV: {csv_path}")
