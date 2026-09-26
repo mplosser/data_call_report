@@ -79,7 +79,7 @@ The dictionary includes descriptions for all MDRM codes: RCON, RCFD, RIAD, RCFA,
 
 ## Detailed Pipeline Steps
 
-### Step 1: Download Chicago Fed Data
+### Chicago Fed download (`01_download_data.py`)
 
 ```bash
 # Download all available data (1985-2021)
@@ -88,7 +88,7 @@ python 01_download_data.py --start-year 1985 --end-year 2021
 
 This downloads quarterly ZIP files containing SAS XPORT (.xpt) files.
 
-### Step 2: Download FFIEC Bulk Data (Manual)
+### FFIEC CDR bulk download, 2011Q1 onward (manual, parsed by `05_parse_ffiec.py`)
 
 For FFIEC_031_041 coverage 2011+, manually download from FFIEC:
 
@@ -97,7 +97,7 @@ For FFIEC_031_041 coverage 2011+, manually download from FFIEC:
 3. Choose quarter end date and "Tab Delimited" format
 4. Save to `data/raw/ffiec/`
 
-### Step 3: Download and Parse Data Dictionary
+### MDRM data dictionary (`02_download_dictionary.py`, `03_parse_dictionary.py`)
 
 ```bash
 # Download MDRM.zip from Federal Reserve
@@ -109,7 +109,7 @@ python 03_parse_dictionary.py
 
 Creates `data/dictionary/data_dictionary.parquet` with variable descriptions.
 
-### Step 4: Parse Data Files
+### Parse to parquet (`04_parse_chicago.py`, `05_parse_ffiec.py`)
 
 ```bash
 # Parse Chicago Fed data (auto-extracts ZIPs, separates by entity type)
@@ -119,7 +119,7 @@ python 04_parse_chicago.py
 python 05_parse_ffiec.py
 ```
 
-### Step 5: Verify and Summarize
+### Verify and summarize (`06_summarize.py`)
 
 ```bash
 python 06_summarize.py
