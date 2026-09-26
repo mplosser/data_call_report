@@ -146,7 +146,7 @@ def download_chicago_fed_data(start_year=1985, end_year=2021, output_dir=DEFAULT
     print(f"Successfully downloaded: {len(downloaded_files)} files")
 
     if failed_downloads:
-        print(f"\n⚠️  Failed to download {len(failed_downloads)} files:")
+        print(f"\nWARNING: Failed to download {len(failed_downloads)} files:")
         for filename, error in failed_downloads[:5]:
             print(f"  - {filename}: {error}")
         if len(failed_downloads) > 5:
@@ -215,7 +215,7 @@ Notes:
 
     # Validate year range
     if args.start_year < 1976 or args.end_year > 2021:
-        print("⚠️  WARNING: Chicago Fed data is only available for 1976-2021")
+        print("WARNING: WARNING: Chicago Fed data is only available for 1976-2021")
         print(f"   Requested: {args.start_year}-{args.end_year}")
         print("   Note: 1976-2010 = all entities, 2011-2021 = FFIEC_002 & FRB_2886b only")
 

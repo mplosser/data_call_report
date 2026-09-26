@@ -53,6 +53,11 @@ SYNC_PREFIX_PAIRS = [('RCFD', 'RCON')]
 # and turns codes into meaningless integers. The all-values-must-convert rule below
 # already protects them in most quarters, but only by accident -- it depends on at
 # least one value in that quarter being non-numeric.
+# MDRM item prefixes on the FFIEC 031/041/051: the CONF-drop and percent-string rules apply
+# only to these, never to header (RSSD*) or TEXT* columns.
+MDRM_ITEM_PREFIXES = {'RCON', 'RCFD', 'RIAD', 'RCFN', 'RCOA', 'RCFA', 'RCOW', 'RCFW'}
+PERCENT_STRING = r'-?\d+(\.\d+)?%'
+
 ALWAYS_TEXT_COLUMNS = {
     'FINANCIAL INSTITUTION NAME',
     'FINANCIAL INSTITUTION ADDRESS',
@@ -207,20 +212,24 @@ def write_parquet_with_metadata(df: pd.DataFrame, output_path: Path, description
     # Convert to pyarrow table
     table = pa.Table.from_pandas(df, preserve_index=False)
 
-    # Build new schema with descriptions
+    # Build new schema with descriptions. Text columns are written as Arrow `string`
+    # whatever pandas produced (newer pandas emit `large_string`, and an all-null text
+    # column arrives as `null`), so every quarter's schema is the same for a reader that
+    # unions them.
     new_fields = []
     for field in table.schema:
         col_name = field.name
         desc = descriptions.get(col_name.upper(), '')
+        ftype = pa.string() if pa.types.is_large_string(field.type) or pa.types.is_null(field.type) else field.type
 
         if desc:
             # Add description as field metadata
             new_metadata = {b'description': desc.encode('utf-8')}
             if field.metadata:
                 new_metadata.update(field.metadata)
-            new_field = pa.field(field.name, field.type, nullable=field.nullable, metadata=new_metadata)
+            new_field = pa.field(field.name, ftype, nullable=field.nullable, metadata=new_metadata)
         else:
-            new_field = field
+            new_field = pa.field(field.name, ftype, nullable=field.nullable, metadata=field.metadata)
 
         new_fields.append(new_field)
 
@@ -454,6 +463,40 @@ def parse_text_content(content, source_name):
         # Drop rows with invalid RSSD_ID
         df = df.dropna(subset=['RSSD_ID'])
         df['RSSD_ID'] = df['RSSD_ID'].astype(int)
+
+        # Two things the CDR bulk files write as text that are not data (2026-09-26):
+        #
+        # 1. Confidential items are written as the literal string "CONF" for every bank
+        #    (322 Schedule RC-O assessment items, two RC-P, two RC-C, one RI-E; 325-327
+        #    columns a quarter from 2013Q4). No column is ever partially CONF, so a column
+        #    whose every populated value is CONF carries no information and is DROPPED.
+        #    The dropped codes are printed so a reader of the parquet can tell "not in the
+        #    file" from "confidential".
+        # 2. The reported capital ratios (RCOA/RCFA 7204, 7205, 7206, P793 and their
+        #    Basel III companions) are written with a percent sign, "9.1154%", from
+        #    2015Q1. A column whose every populated value is a percent string is stored
+        #    as the number written, in PERCENT units (9.1154). Before 2015Q1 the same
+        #    items are numeric in the files but in FRACTIONS (0.0948); a consumer that
+        #    wants one unit across eras must rescale (bankpanel does).
+        item_cols = [c for c in df.columns if str(c)[:4].upper() in MDRM_ITEM_PREFIXES]
+        conf_cols, pct_cols = [], []
+        for col in item_cols:
+            populated = df[col].notna() & (df[col].astype(str).str.strip() != '')
+            if not populated.any():
+                continue
+            vals = df.loc[populated, col].astype(str).str.strip()
+            if (vals == 'CONF').all():
+                conf_cols.append(col)
+            elif vals.str.fullmatch(PERCENT_STRING).all():
+                pct_cols.append(col)
+        if conf_cols:
+            df = df.drop(columns=conf_cols)
+            print(f"    Dropped {len(conf_cols)} all-CONF (confidential) columns: "
+                  f"{', '.join(conf_cols[:4])}{', ...' if len(conf_cols) > 4 else ''}")
+        for col in pct_cols:
+            df[col] = pd.to_numeric(df[col].astype(str).str.strip().str.rstrip('%'), errors='coerce')
+        if pct_cols:
+            print(f"    Percent-string columns stored as numbers in percent units: {', '.join(pct_cols)}")
 
         # Convert numeric columns.
         #

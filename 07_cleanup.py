@@ -98,13 +98,13 @@ def cleanup_extracted(raw_dir, dry_run=False):
         except Exception as e:
             print(f"[WARN] Could not delete {xpt_file.name}: {e}")
 
-    print(f"✓ Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
+    print(f"OK: Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
 
     # Try to remove empty extracted directory
     try:
         if not any(extracted_dir.iterdir()):
             extracted_dir.rmdir()
-            print(f"✓ Removed empty directory: {extracted_dir}")
+            print(f"OK: Removed empty directory: {extracted_dir}")
     except:
         pass
 
@@ -171,11 +171,11 @@ def cleanup_raw(raw_dir, dry_run=False):
     if extracted_dir.exists():
         try:
             shutil.rmtree(extracted_dir)
-            print(f"✓ Removed directory: {extracted_dir}")
+            print(f"OK: Removed directory: {extracted_dir}")
         except Exception as e:
             print(f"[WARN] Could not delete {extracted_dir}: {e}")
 
-    print(f"✓ Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
+    print(f"OK: Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
 
     return deleted_count, total_size_mb
 
@@ -243,11 +243,11 @@ def cleanup_processed(processed_dir, dry_run=False):
             try:
                 if not any(entity_path.iterdir()):
                     entity_path.rmdir()
-                    print(f"✓ Removed empty directory: {entity_path}")
+                    print(f"OK: Removed empty directory: {entity_path}")
             except:
                 pass
 
-    print(f"✓ Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
+    print(f"OK: Deleted {deleted_count} files, freed {total_size_mb:,.1f} MB")
 
     return deleted_count, total_size_mb
 
