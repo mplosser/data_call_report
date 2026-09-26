@@ -101,6 +101,45 @@ class CDRSession:
         return data
 
 
+def manual_steps(output_dir: Path, quarters=None) -> str:
+    """What to do by hand when the scripted download fails."""
+    lines = [
+        "",
+        "MANUAL DOWNLOAD (the scripted download failed; the site works in a browser):",
+        f"  1. Open {URL}",
+        "  2. Select 'Call Reports -- Single Period'",
+        "  3. Choose the reporting period and 'Tab Delimited', then Download",
+        f"  4. Save the ZIP, keeping the site's file name, into {output_dir.resolve()}",
+        "  5. Run: python 05_parse_ffiec.py",
+    ]
+    if quarters:
+        lines.append("  Quarters still needed, and the file name the parser expects:")
+        ends = {1: "03/31", 2: "06/30", 3: "09/30", 4: "12/31"}
+        for q in quarters:
+            lines.append(f"    {q}: {_site_filename(ends[int(q[-1])] + '/' + q[:4])}")
+    lines += [
+        "  If the error says the form has changed, this script needs updating; the manual",
+        "  route above is unaffected. Re-run with --check afterwards to confirm nothing is missing.",
+    ]
+    return "\n".join(lines)
+
+
+CALENDAR_LAG_DAYS = 60   # Call Reports are due 30-35 days after quarter-end; the bulk file follows
+
+
+def calendar_quarters(start: str, lag_days: int) -> list:
+    """Quarters from `start` whose end is at least `lag_days` in the past."""
+    from datetime import date, timedelta
+    y, q = int(start[:4]), int(start[-1])
+    out = []
+    while True:
+        end = date(y, 3 * q, 31 if q in (1, 4) else 30)
+        if end + timedelta(days=lag_days) > date.today():
+            return out
+        out.append(f"{y}Q{q}")
+        y, q = (y + 1, 1) if q == 4 else (y, q + 1)
+
+
 def on_disk(output_dir: Path) -> dict:
     """{quarter label: path} for the bulk ZIPs already downloaded."""
     out = {}
@@ -125,8 +164,13 @@ def main() -> int:
     cdr = CDRSession()
     try:
         dates = cdr.available_dates()
-    except requests.RequestException as e:
-        print(f"ERROR: could not reach {URL}: {e}")
+    except (requests.RequestException, RuntimeError) as e:
+        print(f"ERROR: could not read the list of quarters from {URL}: {e}")
+        # Without the site's list, fall back to the calendar: a quarter is normally in the
+        # CDR bulk files within CALENDAR_LAG_DAYS of its end.
+        have = on_disk(out_dir)
+        expected = calendar_quarters(args.start, CALENDAR_LAG_DAYS)
+        print(manual_steps(out_dir, args.quarters or [q for q in expected if q not in have]))
         return 2
     published = {_quarter_label(d): d for d in dates}
     have = on_disk(out_dir)
@@ -163,7 +207,8 @@ def main() -> int:
                 print(f"    attempt {attempt + 1} failed: {e}")
                 time.sleep(10 * (attempt + 1))
         else:
-            print(f"ERROR: giving up on {q}")
+            print(f"ERROR: giving up on {q} after 3 attempts")
+            print(manual_steps(out_dir, todo[i:]))
             return 1
         time.sleep(DELAY_SECONDS)
     if todo:
