@@ -80,9 +80,10 @@ desc = field.metadata.get(b'description', b'').decode('utf-8')
 ### Entity Type Separation (RSSD9331 Field)
 
 Chicago Fed data contains multiple entity types identified by `RSSD9331`:
-- `1`: Commercial Banks → `FFIEC_031_041/`
-- `10, 11`: Foreign Bank Branches → `FFIEC_002/`
-- `13, 17`: Edge/Agreement Corporations → `FRB_2886b/`
+- `1, 10, 17`: Commercial, savings and co-operative banks → `FFIEC_031_041/`
+- `9, 11`: U.S. branches and agencies of foreign banks → `FFIEC_002/`
+- `13, 21`: Edge/Agreement Corporations → `FRB_2886b/`
+- (source of truth: `ENTITY_TYPES` in `04_parse_chicago.py`)
 - Other values: Excluded from output
 
 ### Single-Pass Processing (04_parse_chicago.py)
@@ -132,7 +133,7 @@ data/dictionary/
 
 **Data directories** (not in repo):
 - `data/raw/chicago/`: Downloaded Chicago Fed ZIP files
-- `data/raw/ffiec/`: Manually downloaded FFIEC bulk files
+- `data/raw/ffiec/`: FFIEC CDR bulk ZIPs, downloaded by `01b_download_ffiec_cdr.py` (2011Q1-present)
 - `data/dictionary/`: MDRM dictionary files
 - `data/processed/`: Output parquet files
 

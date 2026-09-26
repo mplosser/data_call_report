@@ -191,6 +191,10 @@ Chicago Fed data contains multiple entity types identified by **RSSD9331**:
 
 | RSSD9331 | Entity Type | Output Directory |
 |----------|-------------|------------------|
-| 1 | Commercial Bank | `FFIEC_031_041/` |
-| 10, 11 | Foreign Bank Branch | `FFIEC_002/` |
-| 13, 17 | Edge/Agreement Corp | `FRB_2886b/` |
+| 1, 10, 17 | Commercial, savings and co-operative banks (FFIEC 031/041/034) | `FFIEC_031_041/` |
+| 9, 11 | U.S. branches and agencies of foreign banks (FFIEC 002) | `FFIEC_002/` |
+| 13, 21 | Edge and Agreement corporations (FR 2886b) | `FRB_2886b/` |
+
+The mapping is `ENTITY_TYPES` in `04_parse_chicago.py`. Codes 10 and 17 (domestic savings
+banks and co-operative banks) were routed out of `FFIEC_031_041` before 2026-07, which
+dropped real banks; they file the Call Report and belong with it.
