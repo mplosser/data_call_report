@@ -33,7 +33,7 @@ Usage:
     python 01_download_data.py --start-year 2011 --end-year 2021
 
     # Download both ranges for complete coverage
-    python 01_download_data.py --start-year 1985 --end-year 2021
+    python 01_download_data.py --start-year 1976 --end-year 2021
 
 Output:
     ZIP files saved to: data/raw/chicago/call{YY}{MM}.zip
@@ -61,7 +61,7 @@ CHICAGO_FED_BASE_URL = 'https://www.chicagofed.org/-/media/others/banking/financ
 DEFAULT_OUTPUT_DIR = 'data/raw/chicago'
 
 
-def download_chicago_fed_data(start_year=1985, end_year=2021, output_dir=DEFAULT_OUTPUT_DIR):
+def download_chicago_fed_data(start_year=1976, end_year=2021, output_dir=DEFAULT_OUTPUT_DIR):
     """
     Download data from Chicago Fed (individual quarterly files).
 
@@ -70,7 +70,7 @@ def download_chicago_fed_data(start_year=1985, end_year=2021, output_dir=DEFAULT
     - Structure Data (2011-2021Q2): FFIEC_002 and FRB_2886b only
 
     Args:
-        start_year: First year to download (default: 1985)
+        start_year: First year to download (default: 1976)
         end_year: Last year to download (default: 2021)
         output_dir: Directory to save downloaded files
 
@@ -175,11 +175,11 @@ Examples:
   # Download structure data (2011-2021) - FFIEC_002 & FRB_2886b only
   python download.py --start-year 2011 --end-year 2021
 
-  # Download complete range (1985-2021) for full coverage
-  python download.py --start-year 1985 --end-year 2021
+  # Download complete range (1976-2021) for full coverage
+  python download.py --start-year 1976 --end-year 2021
 
   # Custom output directory
-  python download.py --start-year 1985 --end-year 2021 \\
+  python download.py --start-year 1976 --end-year 2021 \\
       --output-dir data/raw/chicago
 
 Notes:
@@ -193,8 +193,8 @@ Notes:
     parser.add_argument(
         '--start-year',
         type=int,
-        default=1985,
-        help='Start year for data download (default: 1985)'
+        default=1976,
+        help='Start year for data download (default: 1976)'
     )
 
     parser.add_argument(

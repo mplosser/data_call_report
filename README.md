@@ -1,6 +1,6 @@
 # Call Report Data Acquisition Pipeline
 
-Scripts for downloading and processing FFIEC 031/041, 002, and FRB 2886b data (1985-2025).
+Scripts for downloading and processing FFIEC 031/041, 002, and FRB 2886b data (1976-2026).
 
 ## Overview
 
@@ -31,7 +31,7 @@ pip install -r requirements.txt
 ## Quick Start
 
 ```bash
-# 1. Download Chicago Fed data (1985-2021) and the FFIEC CDR bulk files (2011Q1-present)
+# 1. Download Chicago Fed data (1976-2021) and the FFIEC CDR bulk files (2011Q1-present)
 python 01_download_data.py
 python 01b_download_ffiec_cdr.py            # every CDR quarter not yet on disk
 python 01b_download_ffiec_cdr.py --check    # newest published vs newest on disk, no download
@@ -59,7 +59,7 @@ python 07_cleanup.py --extracted
 
 | Script | Purpose |
 |--------|---------|
-| `01_download_data.py` | Download Chicago Fed ZIP files (1985-2021) |
+| `01_download_data.py` | Download Chicago Fed ZIP files (1976-2021) |
 | `01b_download_ffiec_cdr.py` | Download FFIEC CDR "Call Reports -- Single Period" bulk ZIPs (2011Q1-present); `--check` reports newest published vs newest on disk |
 | `02_download_dictionary.py` | Download MDRM data dictionary from Federal Reserve |
 | `03_parse_dictionary.py` | Parse MDRM for Call Report variable descriptions |
@@ -72,10 +72,10 @@ python 07_cleanup.py --extracted
 
 | Entity Type | Coverage | Data Source |
 |-------------|----------|-------------|
-| **FFIEC_031_041** (Commercial Banks) | 1985Q1-2010Q4 | Chicago Fed Historical |
+| **FFIEC_031_041** (Commercial Banks) | 1976Q1-2010Q4 | Chicago Fed Historical |
 | | 2011Q1-present (2026Q2 as of 2026-09) | FFIEC CDR Bulk Downloads (`01b_download_ffiec_cdr.py`) |
-| **FFIEC_002** (Foreign Branches) | 1985Q1-2021Q2 | Chicago Fed |
-| **FRB_2886b** (Edge/Agreement Corps) | 1985Q1-2021Q2 | Chicago Fed |
+| **FFIEC_002** (Foreign Branches) | 1976Q1-2021Q2 | Chicago Fed |
+| **FRB_2886b** (Edge/Agreement Corps) | 1978Q4-2021Q2 | Chicago Fed |
 
 ## Data Dictionary Integration
 
@@ -101,8 +101,8 @@ The dictionary includes descriptions for all MDRM codes: RCON, RCFD, RIAD, RCFA,
 ### Chicago Fed download (`01_download_data.py`)
 
 ```bash
-# Download all available data (1985-2021)
-python 01_download_data.py --start-year 1985 --end-year 2021
+# Download all available data (1976-2021)
+python 01_download_data.py --start-year 1976 --end-year 2021
 ```
 
 This downloads quarterly ZIP files containing SAS XPORT (.xpt) files.
@@ -152,13 +152,13 @@ Shows combined quarterly breakdown by entity type with filer and variable counts
 ```
 data/processed/
 ├── FFIEC_031_041/         # Commercial Banks
-│   ├── 1985Q1.parquet
+│   ├── 1976Q1.parquet
 │   └── ...
 ├── FFIEC_002/             # Foreign Bank Branches
-│   ├── 1985Q1.parquet
+│   ├── 1976Q1.parquet
 │   └── ...
 └── FRB_2886b/             # Edge/Agreement Corporations
-    ├── 1985Q1.parquet
+    ├── 1976Q1.parquet
     └── ...
 ```
 
@@ -210,6 +210,13 @@ Chicago Fed data contains multiple entity types identified by **RSSD9331**:
 | 1, 10, 17 | Commercial, savings and co-operative banks (FFIEC 031/041/034) | `FFIEC_031_041/` |
 | 9, 11 | U.S. branches and agencies of foreign banks (FFIEC 002) | `FFIEC_002/` |
 | 13, 21 | Edge and Agreement corporations (FR 2886b) | `FRB_2886b/` |
+
+**1976Q4 has no RSSD9331.** That file (CALL7612) uses a smaller layout without the
+entity-type field, so the parser borrows each bank's type by RSSD ID from the next quarter's
+file (1977Q1: 14,685 banks), then the previous one (1976Q3: 42 more; the two never disagree),
+and routes the rest by charter type RSSD9048 where the neighbouring files map it to a single
+type (13 banks, charter 200/250 -> commercial bank). The file holds no foreign branches or
+Edge corporations. See `borrow_entity_type` in `04_parse_chicago.py`.
 
 The mapping is `ENTITY_TYPES` in `04_parse_chicago.py`. Codes 10 and 17 (domestic savings
 banks and co-operative banks) were routed out of `FFIEC_031_041` before 2026-07, which

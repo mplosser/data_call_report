@@ -31,6 +31,7 @@ Usage:
     python 04_parse_chicago.py --force
 """
 
+import numpy as np
 import pandas as pd
 import pyreadstat
 import pyarrow as pa
@@ -305,7 +306,67 @@ def extract_xpt_from_zip(zip_path):
         return extract_path
 
 
-def process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=False):
+def _neighbor_quarter_file(reporting_period, offset, input_dir):
+    """The raw file (extracted .xpt or ZIP) for the quarter ``offset`` quarters away."""
+    p = pd.Period(reporting_period, freq='Q') + offset
+    stem = f"call{str(p.year)[-2:]}{p.quarter * 3:02d}"
+    input_dir = Path(input_dir)
+    for cand in (input_dir / 'extracted' / f"{stem.upper()}.xpt", input_dir / f"{stem.upper()}.xpt",
+                 input_dir / f"{stem}.zip"):
+        if cand.exists():
+            return cand
+    return None
+
+
+def _read_id_columns(path, cols):
+    """Read only ``cols`` from a raw quarter (a ZIP is extracted to a temp file and removed)."""
+    path = Path(path)
+    if path.suffix.lower() == '.zip':
+        import tempfile
+        with zipfile.ZipFile(path) as zf, tempfile.TemporaryDirectory() as tmp:
+            name = [f for f in zf.namelist() if f.lower().endswith('.xpt')][0]
+            xpt = zf.extract(name, tmp)
+            df, _ = pyreadstat.read_xport(xpt, usecols=cols)
+            return df
+    df, _ = pyreadstat.read_xport(str(path), usecols=cols)
+    return df
+
+
+def borrow_entity_type(df, reporting_period, input_dir):
+    """Fill RSSD9331 for a file that does not carry it (the 1976Q4 file).
+
+    A bank's entity type is taken from the NEXT quarter's file by RSSD ID, then the previous
+    quarter's; a bank in neither is routed by its charter type (RSSD9048) where, in those
+    neighbouring files, that charter type maps to a single entity type. For 1976Q4: 14,685
+    banks from 1977Q1, 42 from 1976Q3 (no disagreement between the two), 13 by charter type
+    (200/250 -> 1, commercial bank, in both neighbours). Returns the counts.
+    """
+    ids = df['RSSD9001']
+    out = pd.Series(np.nan, index=df.index)
+    counts = {}
+    neighbours = []
+    for offset in (1, -1):
+        f = _neighbor_quarter_file(reporting_period, offset, input_dir)
+        if f is None:
+            continue
+        n = _read_id_columns(f, ['RSSD9001', 'RSSD9331', 'RSSD9048']).dropna(subset=['RSSD9331'])
+        neighbours.append(n)
+        before = out.notna().sum()
+        out = out.fillna(ids.map(n.drop_duplicates('RSSD9001').set_index('RSSD9001')['RSSD9331']))
+        counts[f"from {pd.Period(reporting_period, freq='Q') + offset}"] = int(out.notna().sum() - before)
+    if neighbours and 'RSSD9048' in df.columns:
+        both = pd.concat(neighbours)
+        per_charter = both.groupby('RSSD9048')['RSSD9331'].agg(lambda s: s.iloc[0] if s.nunique() == 1 else np.nan)
+        before = out.notna().sum()
+        out = out.fillna(df['RSSD9048'].map(per_charter))
+        counts['by charter type'] = int(out.notna().sum() - before)
+    counts['unresolved'] = int(out.isna().sum())
+    df['RSSD9331'] = out
+    return counts
+
+
+def process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=False,
+                    input_dir=None):
     """
     Read XPT file, split by entity type, and write parquet files immediately.
     Returns: Dict[entity_type, (record_count, col_count)] - returns 'skipped' for skipped files
@@ -365,9 +426,14 @@ def process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_m
         # Convert to uppercase
         df.columns = df.columns.str.upper()
 
-        # Check if RSSD9331 exists
+        # Entity type: the 1976Q4 file does not carry RSSD9331, so it is borrowed from the
+        # neighbouring quarters (see borrow_entity_type); without it the quarter is skipped.
         if 'RSSD9331' not in df.columns:
-            return {}
+            if input_dir is None or 'RSSD9001' not in df.columns:
+                print(f"[WARN] {quarter_str}: no RSSD9331 and no neighbouring files -- skipped")
+                return {}
+            counts = borrow_entity_type(df, reporting_period, input_dir)
+            print(f"[INFO] {quarter_str}: RSSD9331 absent from the file; entity type borrowed: {counts}")
 
         results = {}
 
@@ -430,8 +496,15 @@ def main():
     xpt_files = sorted([p for p in input_dir.glob('*.xpt')] +
                       ([p for p in extracted_dir.glob('*.xpt')] if extracted_dir.exists() else []))
 
-    # Extract ZIPs if present
-    zip_files = sorted(input_dir.glob('*.zip'))
+    # Extract ZIPs if present -- only those in the requested date range
+    start_date = pd.Timestamp(args.start_date) if args.start_date else None
+    end_date = pd.Timestamp(args.end_date) if args.end_date else None
+
+    def _in_range(name):
+        rp = infer_reporting_period_from_filename(name)
+        return rp is not None and not (start_date and rp < start_date) and not (end_date and rp > end_date)
+
+    zip_files = sorted(z for z in input_dir.glob('*.zip') if _in_range(z.name))
     if zip_files:
         extracted_dir.mkdir(parents=True, exist_ok=True)
         print(f"\n[INFO] Found {len(zip_files)} ZIP files in {input_dir}, extracting to {extracted_dir}...")
@@ -453,8 +526,6 @@ def main():
         return
 
     # Filter by date
-    start_date = pd.Timestamp(args.start_date) if args.start_date else None
-    end_date = pd.Timestamp(args.end_date) if args.end_date else None
 
     filtered_files = []
     for xpt_file in xpt_files:
@@ -499,7 +570,8 @@ def main():
     stats = defaultdict(lambda: {'processed': 0, 'total_records': 0, 'total_cols': 0, 'skipped': 0})
 
     for xpt_file, reporting_period in tqdm(filtered_files, desc="Processing quarters"):
-        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=args.force)
+        results = process_quarter(xpt_file, reporting_period, output_dir, descriptions, form_mapping, force=args.force,
+                                  input_dir=input_dir)
 
         if results == 'skipped':
             for entity_type in ENTITY_TYPES:
